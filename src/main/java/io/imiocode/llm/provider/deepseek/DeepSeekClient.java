@@ -8,13 +8,24 @@ import io.imiocode.config.AppConfig;
 import io.imiocode.conversation.ChatMessage;
 import io.imiocode.conversation.ChatRequest;
 import io.imiocode.conversation.ChatResponse;
+import io.imiocode.conversation.MessagePart;
+import io.imiocode.conversation.MessageRole;
+import io.imiocode.conversation.TextPart;
+import io.imiocode.conversation.ToolCallPart;
+import io.imiocode.conversation.ToolResultPart;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
 import io.imiocode.llm.StreamListener;
+import io.imiocode.llm.ToolCallAssembler;
+import io.imiocode.llm.ToolResultJson;
 import io.imiocode.llm.transport.HttpErrorMapper;
 import io.imiocode.llm.transport.SseEvent;
 import io.imiocode.llm.transport.SseEventReader;
+import io.imiocode.tool.SecretRedactor;
+import io.imiocode.tool.ToolCall;
+import io.imiocode.tool.ToolDefinition;
+import io.imiocode.tool.ToolRegistry;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -22,6 +33,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -34,6 +48,8 @@ public final class DeepSeekClient implements LlmClient {
     private final ObjectMapper objectMapper;
     private final SseEventReader eventReader;
     private final HttpErrorMapper errorMapper;
+    private final ToolRegistry tools;
+    private final ToolResultJson resultJson;
     private final AtomicReference<CompletableFuture<HttpResponse<InputStream>>> activeRequest = new AtomicReference<>();
     private final AtomicReference<InputStream> activeStream = new AtomicReference<>();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -44,11 +60,23 @@ public final class DeepSeekClient implements LlmClient {
             ObjectMapper objectMapper,
             SseEventReader eventReader,
             HttpErrorMapper errorMapper) {
-        this.config = config;
-        this.httpClient = httpClient;
-        this.objectMapper = objectMapper;
-        this.eventReader = eventReader;
-        this.errorMapper = errorMapper;
+        this(config, httpClient, objectMapper, eventReader, errorMapper, new ToolRegistry());
+    }
+
+    public DeepSeekClient(
+            AppConfig config,
+            HttpClient httpClient,
+            ObjectMapper objectMapper,
+            SseEventReader eventReader,
+            HttpErrorMapper errorMapper,
+            ToolRegistry tools) {
+        this.config = Objects.requireNonNull(config, "config");
+        this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
+        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
+        this.eventReader = Objects.requireNonNull(eventReader, "eventReader");
+        this.errorMapper = Objects.requireNonNull(errorMapper, "errorMapper");
+        this.tools = Objects.requireNonNull(tools, "tools");
+        this.resultJson = new ToolResultJson(objectMapper, new SecretRedactor(config.apiKey()));
     }
 
     @Override
@@ -65,10 +93,12 @@ public final class DeepSeekClient implements LlmClient {
             InputStream body = response.body();
             activeStream.set(body);
             StringBuilder content = new StringBuilder();
+            ToolCallAssembler assembler = new ToolCallAssembler(objectMapper);
             AtomicBoolean done = new AtomicBoolean();
             AtomicBoolean finishReasonSeen = new AtomicBoolean();
             try {
-                eventReader.read(body, event -> handleEvent(event, listener, content, done, finishReasonSeen));
+                eventReader.read(body,
+                        event -> handleEvent(event, listener, content, assembler, done, finishReasonSeen));
             } catch (StreamAbort abort) {
                 throw abort.exception;
             } finally {
@@ -77,10 +107,7 @@ public final class DeepSeekClient implements LlmClient {
             if (!done.get() || !finishReasonSeen.get()) {
                 throw protocolError("DeepSeek 响应流未正常完成", null);
             }
-            if (content.isEmpty()) {
-                throw protocolError("DeepSeek 完成响应但未返回文本", null);
-            }
-            return new ChatResponse(content.toString());
+            return completedResponse(content, assembler.finish());
         } catch (LlmException exception) {
             throw exception;
         } catch (IOException exception) {
@@ -117,10 +144,10 @@ public final class DeepSeekClient implements LlmClient {
         root.put("max_tokens", config.maxOutputTokens());
         ArrayNode messages = root.putArray("messages");
         for (ChatMessage message : request.messages()) {
-            ObjectNode item = messages.addObject();
-            item.put("role", message.role().apiValue());
-            item.put("content", message.content());
+            appendMessage(messages, message);
         }
+        ArrayNode definitions = root.putArray("tools");
+        tools.exportEnabled(this::encodeDefinition).forEach(definitions::add);
         try {
             return HttpRequest.newBuilder(endpoint("/chat/completions"))
                     .timeout(config.requestTimeout())
@@ -134,10 +161,59 @@ public final class DeepSeekClient implements LlmClient {
         }
     }
 
+    private void appendMessage(ArrayNode messages, ChatMessage message) {
+        if (message.role() == MessageRole.TOOL) {
+            for (MessagePart part : message.parts()) {
+                ToolResultPart resultPart = (ToolResultPart) part;
+                messages.addObject()
+                        .put("role", "tool")
+                        .put("tool_call_id", resultPart.callId())
+                        .put("content", resultJson.encodeString(resultPart.result()));
+            }
+            return;
+        }
+        ObjectNode item = messages.addObject();
+        item.put("role", message.role().apiValue());
+        if (message.content().isEmpty()) {
+            item.putNull("content");
+        } else {
+            item.put("content", message.content());
+        }
+        if (message.role() == MessageRole.ASSISTANT) {
+            ArrayNode calls = null;
+            for (MessagePart part : message.parts()) {
+                if (part instanceof ToolCallPart callPart) {
+                    if (calls == null) {
+                        calls = item.putArray("tool_calls");
+                    }
+                    ToolCall call = callPart.call();
+                    ObjectNode encoded = calls.addObject();
+                    encoded.put("id", call.id());
+                    encoded.put("type", "function");
+                    ObjectNode function = encoded.putObject("function");
+                    function.put("name", call.name());
+                    function.put("arguments", call.arguments().toString());
+                }
+            }
+        }
+    }
+
+    private ObjectNode encodeDefinition(ToolDefinition definition) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("type", "function");
+        ObjectNode function = node.putObject("function");
+        function.put("name", definition.name());
+        function.put("description", definition.description());
+        function.set("parameters", definition.inputSchema());
+        function.put("strict", false);
+        return node;
+    }
+
     private void handleEvent(
             SseEvent event,
             StreamListener listener,
             StringBuilder content,
+            ToolCallAssembler assembler,
             AtomicBoolean done,
             AtomicBoolean finishReasonSeen) {
         if ("[DONE]".equals(event.data())) {
@@ -158,13 +234,53 @@ public final class DeepSeekClient implements LlmClient {
                 throw new StreamAbort(protocolError("DeepSeek 流事件缺少 choices", null));
             }
             JsonNode choice = choices.get(0);
-            appendDelta(choice.path("delta").path("content").asText(), listener, content);
-            if (!choice.path("finish_reason").isNull() && !choice.path("finish_reason").isMissingNode()) {
+            JsonNode delta = choice.path("delta");
+            appendDelta(delta.path("content").asText(""), listener, content);
+            JsonNode toolCalls = delta.path("tool_calls");
+            if (!toolCalls.isMissingNode() && !toolCalls.isNull()) {
+                if (!toolCalls.isArray()) {
+                    throw new IllegalArgumentException("tool_calls 必须是数组");
+                }
+                for (JsonNode toolCall : toolCalls) {
+                    JsonNode index = toolCall.get("index");
+                    if (index == null || !index.canConvertToInt() || index.intValue() < 0) {
+                        throw new IllegalArgumentException("工具调用缺少有效位置");
+                    }
+                    JsonNode function = toolCall.path("function");
+                    assembler.append(
+                            index.intValue(),
+                            textOrNull(toolCall.get("id")),
+                            textOrNull(function.get("name")),
+                            textOrNull(function.get("arguments")));
+                }
+            }
+            JsonNode finishReason = choice.path("finish_reason");
+            if (!finishReason.isNull() && !finishReason.isMissingNode()) {
+                String reason = finishReason.asText();
+                if (!"stop".equals(reason) && !"tool_calls".equals(reason)) {
+                    throw new StreamAbort(protocolError("DeepSeek 响应因 " + reason + " 未正常完成", null));
+                }
                 finishReasonSeen.set(true);
             }
-        } catch (IOException exception) {
-            throw new StreamAbort(protocolError("DeepSeek 返回了无法解析的流事件", exception));
+        } catch (IOException | IllegalArgumentException exception) {
+            throw new StreamAbort(protocolError("DeepSeek 返回了无效的工具流事件", exception));
         }
+    }
+
+    private ChatResponse completedResponse(StringBuilder content, List<ToolCall> calls) throws LlmException {
+        List<MessagePart> parts = new ArrayList<>();
+        if (!content.isEmpty()) {
+            parts.add(new TextPart(content.toString()));
+        }
+        calls.stream().map(ToolCallPart::new).forEach(parts::add);
+        if (parts.isEmpty()) {
+            throw protocolError("DeepSeek 完成响应但没有文本或工具调用", null);
+        }
+        return new ChatResponse(new ChatMessage(MessageRole.ASSISTANT, parts));
+    }
+
+    private static String textOrNull(JsonNode node) {
+        return node != null && node.isTextual() ? node.textValue() : null;
     }
 
     private String readErrorCode(InputStream body) {
