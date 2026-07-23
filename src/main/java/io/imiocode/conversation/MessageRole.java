@@ -2,7 +2,8 @@ package io.imiocode.conversation;
 
 public enum MessageRole {
     USER("user"),
-    ASSISTANT("assistant");
+    ASSISTANT("assistant"),
+    TOOL("tool");
 
     private final String apiValue;
 
