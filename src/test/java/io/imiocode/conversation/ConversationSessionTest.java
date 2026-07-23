@@ -15,6 +15,12 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -131,6 +137,94 @@ class ConversationSessionTest {
 
         assertTrue(exception.toolsExecuted());
         assertEquals(List.of(), session.historySnapshot());
+    }
+
+    @Test
+    void closeIsIdempotentAndPreventsFurtherRequests() {
+        AtomicInteger closes = new AtomicInteger();
+        LlmClient client = new LlmClient() {
+            @Override
+            public ChatResponse streamChat(ChatRequest request, StreamListener listener) {
+                return new ChatResponse("不应调用");
+            }
+
+            @Override
+            public void close() {
+                closes.incrementAndGet();
+            }
+        };
+        ConversationSession session = new ConversationSession(client);
+
+        session.close();
+        session.close();
+
+        assertEquals(1, closes.get());
+        assertThrows(ConversationException.class,
+                () -> session.sendWithEvents("消息", text -> { }));
+    }
+
+    @Test
+    void closeCancelsActiveToolAndDoesNotSendFollowUp() throws Exception {
+        ToolCall call = call("c1", "blocking");
+        AtomicInteger clientCalls = new AtomicInteger();
+        LlmClient client = new LlmClient() {
+            @Override
+            public ChatResponse streamChat(ChatRequest request, StreamListener listener) {
+                clientCalls.incrementAndGet();
+                return toolResponse(call);
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean cancelled = new AtomicBoolean();
+        Tool blocking = new Tool() {
+            @Override
+            public ToolDefinition definition() {
+                return new ToolDefinition(
+                        "blocking", "阻塞工具",
+                        com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                                .put("type", "object"),
+                        ToolRisk.HIGH);
+            }
+
+            @Override
+            public ToolResult execute(com.fasterxml.jackson.databind.node.ObjectNode arguments) {
+                started.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                }
+                return ToolResult.interrupted("", "已取消", false);
+            }
+
+            @Override
+            public void cancel() {
+                cancelled.set(true);
+                release.countDown();
+            }
+        };
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(blocking);
+        ConversationSession session = new ConversationSession(client, new ToolExecutor(registry));
+
+        try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            var future = threads.submit(() -> session.sendWithEvents("执行", text -> { }));
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            session.close();
+            ExecutionException exception = assertThrows(
+                    ExecutionException.class,
+                    () -> future.get(2, TimeUnit.SECONDS));
+            assertTrue(exception.getCause() instanceof ConversationException);
+            assertTrue(((ConversationException) exception.getCause()).interrupted());
+            assertTrue(cancelled.get());
+            assertEquals(1, clientCalls.get());
+            assertEquals(List.of(), session.historySnapshot());
+        }
     }
 
     private static ChatResponse toolResponse(ToolCall call) {

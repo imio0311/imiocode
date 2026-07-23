@@ -36,6 +36,15 @@ class WriteFileToolTest {
         assertEquals("保留", Files.readString(workspace.resolve("keep.txt")));
     }
 
+    @Test
+    void rejectsContentOverOneMibBeforeChangingTarget() throws Exception {
+        Path target = workspace.resolve("keep.txt");
+        Files.writeString(target, "保留");
+
+        assertFalse(tool().execute(args("keep.txt", "x".repeat(1024 * 1024 + 1))).success());
+        assertEquals("保留", Files.readString(target));
+    }
+
     private WriteFileTool tool() {
         return new WriteFileTool(new WorkspacePolicy(workspace), ToolLimits.defaults(), new SecretRedactor(""));
     }

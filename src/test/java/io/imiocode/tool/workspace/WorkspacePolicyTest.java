@@ -1,6 +1,7 @@
 package io.imiocode.tool.workspace;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -51,7 +52,7 @@ class WorkspacePolicyTest {
         try {
             Files.createSymbolicLink(link, outside);
         } catch (IOException | UnsupportedOperationException exception) {
-            return;
+            Assumptions.abort("当前平台不允许创建符号链接");
         }
         WorkspacePolicy policy = new WorkspacePolicy(workspace);
         assertThrows(IllegalArgumentException.class, () -> policy.resolveExistingPath("link"));

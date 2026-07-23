@@ -45,6 +45,22 @@ class ReadFileToolTest {
         assertFalse(tool().execute(args("config.yaml")).success());
     }
 
+    @Test
+    void validatesRangesAndReadsPastEndToEof() throws Exception {
+        Files.writeString(workspace.resolve("a.txt"), "一\n二");
+        ReadFileTool tool = tool();
+
+        assertTrue(tool.execute(JsonNodeFactory.instance.objectNode()
+                .put("path", "a.txt").put("start_line", 2).put("end_line", 99))
+                .output().contains("2: 二"));
+        assertFalse(tool.execute(JsonNodeFactory.instance.objectNode()
+                .put("path", "a.txt").put("start_line", 3)).success());
+        assertFalse(tool.execute(JsonNodeFactory.instance.objectNode()
+                .put("path", "a.txt").put("start_line", 2).put("end_line", 1)).success());
+        assertFalse(tool.execute(JsonNodeFactory.instance.objectNode()
+                .put("path", "missing.txt")).success());
+    }
+
     private ReadFileTool tool() {
         return new ReadFileTool(new WorkspacePolicy(workspace), ToolLimits.defaults(), new SecretRedactor(""));
     }

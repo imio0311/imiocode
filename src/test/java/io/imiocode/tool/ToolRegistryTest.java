@@ -3,8 +3,17 @@ package io.imiocode.tool;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.util.List;
+import io.imiocode.tool.core.BashTool;
+import io.imiocode.tool.core.EditFileTool;
+import io.imiocode.tool.core.GlobTool;
+import io.imiocode.tool.core.GrepTool;
+import io.imiocode.tool.core.ReadFileTool;
+import io.imiocode.tool.core.WriteFileTool;
+import io.imiocode.tool.workspace.WorkspacePolicy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -45,6 +54,32 @@ class ToolRegistryTest {
         assertThrows(IllegalArgumentException.class, () -> registry.register(new StubTool("alpha")));
         assertThrows(IllegalArgumentException.class, () -> registry.disable("missing"));
         assertFalse(registry.findEnabled("missing").isPresent());
+    }
+
+    @Test
+    void registersAllSixCoreDefinitionsWithSchemasAndRisks(@TempDir Path workspace) {
+        ToolRegistry registry = new ToolRegistry();
+        ToolLimits limits = ToolLimits.defaults();
+        SecretRedactor redactor = new SecretRedactor("");
+        WorkspacePolicy policy = new WorkspacePolicy(workspace);
+        registry.register(new ReadFileTool(policy, limits, redactor));
+        registry.register(new WriteFileTool(policy, limits, redactor));
+        registry.register(new EditFileTool(policy, limits, redactor));
+        registry.register(new BashTool(policy, limits, redactor));
+        registry.register(new GlobTool(policy, limits, redactor));
+        registry.register(new GrepTool(policy, limits, redactor));
+
+        List<ToolDefinition> definitions = registry.enabledDefinitions();
+        assertEquals(List.of("bash", "edit_file", "glob", "grep", "read_file", "write_file"),
+                definitions.stream().map(ToolDefinition::name).toList());
+        definitions.forEach(definition -> {
+            assertEquals("object", definition.inputSchema().path("type").asText());
+            assertTrue(definition.inputSchema().path("required").isArray());
+            assertFalse(definition.inputSchema().path("additionalProperties").asBoolean(true));
+        });
+        assertEquals(ToolRisk.HIGH, definitions.get(0).risk());
+        assertEquals(ToolRisk.MEDIUM, definitions.get(1).risk());
+        assertEquals(ToolRisk.MEDIUM, definitions.get(5).risk());
     }
 
     private static final class StubTool implements Tool {

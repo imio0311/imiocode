@@ -38,6 +38,15 @@ class EditFileToolTest {
                 java.util.HexFormat.of().formatHex(Files.readAllBytes(file)));
     }
 
+    @Test
+    void rejectsOversizedEditResultWithoutChangingFile() throws Exception {
+        Path file = workspace.resolve("code.txt");
+        Files.writeString(file, "old");
+
+        assertFalse(tool().execute(args("old", "x".repeat(1024 * 1024 + 1))).success());
+        assertEquals("old", Files.readString(file));
+    }
+
     private EditFileTool tool() {
         return new EditFileTool(new WorkspacePolicy(workspace), ToolLimits.defaults(), new SecretRedactor(""));
     }

@@ -66,6 +66,23 @@ class BashToolTest {
     }
 
     @Test
+    void capturesAndTruncatesStdoutAndStderrAndRedactsSecrets() {
+        try (BashTool tool = tool(limits(Duration.ofSeconds(5), 64))) {
+            ToolResult result = tool.execute(args(isWindows()
+                    ? "Write-Output 'test-secret Authorization: Bearer abc'; "
+                            + "[Console]::Out.Write(('o' * 500)); [Console]::Error.Write(('e' * 500))"
+                    : "printf 'test-secret Authorization: Bearer abc\\n'; "
+                            + "printf '%0500d' 0; printf '%0500d' 0 >&2"));
+
+            assertTrue(result.success());
+            assertTrue(result.truncated());
+            assertFalse(result.output().contains("test-secret"));
+            assertFalse(result.output().contains("Bearer abc"));
+            assertTrue(result.error().contains("输出已截断"));
+        }
+    }
+
+    @Test
     void removesSensitiveEnvironmentNamesAndSupportsCancellation() throws Exception {
         try (BashTool tool = tool(defaultLimits())) {
             ToolResult environment = tool.execute(args(isWindows()

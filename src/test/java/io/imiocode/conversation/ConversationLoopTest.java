@@ -4,6 +4,7 @@ import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
 import io.imiocode.llm.StreamListener;
+import io.imiocode.llm.transport.MockLlmServer;
 import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiContext;
 import io.imiocode.terminal.UiState;
@@ -21,6 +22,11 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -105,6 +111,94 @@ class ConversationLoopTest {
                 UiState.STREAMING,
                 UiState.READY), terminal.states);
         assertEquals(List.of("完成"), terminal.deltas);
+    }
+
+    @Test
+    void applicationProcessCompletesLocalToolRoundTrip() throws Exception {
+        try (MockLlmServer server = new MockLlmServer();
+             var readerThread = Executors.newVirtualThreadPerTaskExecutor()) {
+            server.enqueueSse("data: {\"choices\":[{\"delta\":{\"tool_calls\":["
+                    + "{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\","
+                    + "\"arguments\":\"{\\\"path\\\":\\\"pom.xml\\\"}\"}}]},"
+                    + "\"finish_reason\":\"tool_calls\"}]}\n\n"
+                    + "data: [DONE]\n\n");
+            server.enqueueSse("data: {\"choices\":[{\"delta\":{\"content\":\"项目使用 Java 21。\"},"
+                    + "\"finish_reason\":\"stop\"}]}\n\n"
+                    + "data: [DONE]\n\n");
+            String java = Path.of(System.getProperty("java.home"), "bin",
+                    System.getProperty("os.name").toLowerCase().contains("win") ? "java.exe" : "java")
+                    .toString();
+            String classpath = System.getProperty(
+                    "surefire.test.class.path", System.getProperty("java.class.path"));
+            ProcessBuilder builder = new ProcessBuilder(
+                    java, "-cp", classpath, "io.imiocode.ImioCodeApplication");
+            builder.directory(Path.of("").toAbsolutePath().toFile());
+            builder.redirectErrorStream(true);
+            builder.environment().put("IMIO_PROVIDER", "deepseek");
+            builder.environment().put("IMIO_MODEL", "deepseek-chat");
+            builder.environment().put("DEEPSEEK_API_KEY", "local-test-key");
+            builder.environment().put("DEEPSEEK_BASE_URL", server.baseUri().toString());
+            Process process = builder.start();
+            try {
+                var outputFuture = readerThread.submit(
+                        () -> new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+                try (OutputStreamWriter input =
+                             new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8)) {
+                    input.write("请读取 pom.xml，告诉我项目使用的 Java 版本。\n");
+                    input.write("/exit\n");
+                    input.flush();
+                }
+
+                assertTrue(process.waitFor(20, TimeUnit.SECONDS), "应用进程未在时限内退出");
+                String output = outputFuture.get(2, TimeUnit.SECONDS);
+                assertEquals(0, process.exitValue(), output);
+                assertTrue(output.contains("read_file"), output);
+                assertTrue(output.contains("LOW"), output);
+                assertTrue(output.contains("项目使用 Java 21。"), output);
+                assertTrue(server.takeRequest().body().contains("\"tools\""));
+                String followUp = server.takeRequest().body();
+                assertTrue(followUp.contains("\"role\":\"tool\""));
+                assertTrue(followUp.contains("maven.compiler.release"));
+            } finally {
+                if (process.isAlive()) {
+                    process.destroyForcibly();
+                }
+            }
+        }
+    }
+
+    @Test
+    void reportsExecutedToolsWhenFinalResponseFails() {
+        ToolCall call = new ToolCall(
+                "c1", "read_file",
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                        .put("path", "a.txt"));
+        LlmClient client = new LlmClient() {
+            private int calls;
+
+            @Override
+            public ChatResponse streamChat(ChatRequest request, StreamListener listener) throws LlmException {
+                if (calls++ == 0) {
+                    return new ChatResponse(new ChatMessage(
+                            MessageRole.ASSISTANT, List.of(new ToolCallPart(call))));
+                }
+                throw new LlmException(LlmErrorType.NETWORK, true, null, "最终回复失败");
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(stubTool());
+        FakeTerminal terminal = new FakeTerminal("run", "/quit");
+
+        ConversationSession session = new ConversationSession(client, new ToolExecutor(registry));
+        new ConversationLoop(session, terminal).run();
+
+        assertEquals(1, terminal.errors.size());
+        assertTrue(terminal.errors.getFirst().contains("工具已经执行"));
+        assertEquals(List.of(), session.historySnapshot());
     }
 
     private static Tool stubTool() {
