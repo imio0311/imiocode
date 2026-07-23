@@ -1,5 +1,10 @@
 package io.imiocode.terminal;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import io.imiocode.tool.ToolCall;
+import io.imiocode.tool.ToolExecutionEvent;
+import io.imiocode.tool.ToolExecutionState;
+import io.imiocode.tool.ToolResult;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.terminal.Terminal;
@@ -58,6 +63,13 @@ class JLineTerminalUiTest {
         ui.showWelcome(new UiContext("ImioCode", "dev", "deepseek", "deepseek-chat", Path.of("work")));
         ui.updateState(UiState.THINKING);
         ui.updateState(UiState.STREAMING);
+        ToolCall call = new ToolCall(
+                "c1", "read_file", JsonNodeFactory.instance.objectNode().put("path", "a.txt"));
+        ui.showToolEvent(new ToolExecutionEvent(ToolExecutionState.QUEUED, call, null));
+        ui.showToolEvent(new ToolExecutionEvent(
+                ToolExecutionState.RUNNING, call, null));
+        ui.showToolEvent(new ToolExecutionEvent(
+                ToolExecutionState.SUCCEEDED, call, ToolResult.success("ok")));
         ui.updateState(UiState.READY);
         ui.close();
 
@@ -66,6 +78,9 @@ class JLineTerminalUiTest {
         assertTrue(text.contains("deepseek | deepseek-chat"), () -> "实际输出: " + text);
         assertTrue(text.contains("Thinking…"));
         assertTrue(text.contains("Streaming"));
+        assertTrue(text.contains("read_file"));
+        assertTrue(text.contains("LOW"));
+        assertTrue(text.contains("成功"));
         assertTrue(text.contains("Ready"));
         assertTrue(!text.contains("\u001B["));
     }

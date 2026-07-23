@@ -1,5 +1,8 @@
 package io.imiocode.terminal;
 
+import io.imiocode.tool.SecretRedactor;
+import io.imiocode.tool.ToolExecutionEvent;
+import io.imiocode.tool.ToolExecutionState;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -22,6 +25,7 @@ public final class JLineTerminalUi implements TerminalUi {
     private final LineReader lineReader;
     private final PrintWriter writer;
     private final TerminalLayout layout = new TerminalLayout();
+    private final ToolSummaryFormatter toolFormatter;
     private final AtomicReference<Runnable> interruptHandler = new AtomicReference<>(() -> { });
     private final AtomicReference<UiState> state = new AtomicReference<>(UiState.READY);
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -29,17 +33,32 @@ public final class JLineTerminalUi implements TerminalUi {
     private boolean assistantLineOpen;
 
     public JLineTerminalUi() throws IOException {
-        this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build());
+        this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build(),
+                new SecretRedactor(""));
+    }
+
+    public JLineTerminalUi(SecretRedactor redactor) throws IOException {
+        this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build(),
+                redactor);
     }
 
     JLineTerminalUi(Terminal terminal) {
-        this(terminal, LineReaderBuilder.builder().terminal(terminal).build());
+        this(terminal, LineReaderBuilder.builder().terminal(terminal).build(), new SecretRedactor(""));
+    }
+
+    JLineTerminalUi(Terminal terminal, SecretRedactor redactor) {
+        this(terminal, LineReaderBuilder.builder().terminal(terminal).build(), redactor);
     }
 
     JLineTerminalUi(Terminal terminal, LineReader lineReader) {
+        this(terminal, lineReader, new SecretRedactor(""));
+    }
+
+    JLineTerminalUi(Terminal terminal, LineReader lineReader, SecretRedactor redactor) {
         this.terminal = Objects.requireNonNull(terminal, "terminal");
         this.lineReader = Objects.requireNonNull(lineReader, "lineReader");
         this.writer = terminal.writer();
+        this.toolFormatter = new ToolSummaryFormatter(redactor);
         terminal.handle(Terminal.Signal.INT, signal -> interruptHandler.get().run());
         installMultilineWidget();
     }
@@ -134,6 +153,34 @@ public final class JLineTerminalUi implements TerminalUi {
     }
 
     @Override
+    public synchronized void showToolEvent(ToolExecutionEvent event) {
+        if (closed.get()) {
+            return;
+        }
+        finishOpenAssistantLine();
+        String marker = switch (event.state()) {
+            case QUEUED -> "○";
+            case RUNNING -> "▶";
+            case SUCCEEDED -> "✓";
+            case FAILED -> "✗";
+        };
+        String line = marker + " [" + event.call().name() + " · "
+                + toolFormatter.riskLabel(event.call()) + " · "
+                + event.state().name().toLowerCase(java.util.Locale.ROOT) + "] "
+                + toolFormatter.inputSummary(event.call()) + " — "
+                + toolFormatter.resultSummary(event);
+        TerminalMode mode = currentMode();
+        AttributedStyle style = switch (event.state()) {
+            case QUEUED -> AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW);
+            case RUNNING -> AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN);
+            case SUCCEEDED -> AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN);
+            case FAILED -> AttributedStyle.DEFAULT.foreground(AttributedStyle.RED);
+        };
+        printStyled(TerminalLayout.truncate(line, terminalWidth()), style, mode);
+        writer.flush();
+    }
+
+    @Override
     public synchronized void printError(String message) {
         if (closed.get()) {
             return;
@@ -205,6 +252,8 @@ public final class JLineTerminalUi implements TerminalUi {
             case READY -> AttributedStyle.GREEN;
             case THINKING -> AttributedStyle.YELLOW;
             case STREAMING -> AttributedStyle.CYAN;
+            case TOOL_WAITING -> AttributedStyle.YELLOW;
+            case TOOL_RUNNING -> AttributedStyle.CYAN;
             case ERROR -> AttributedStyle.RED;
         };
         return AttributedStyle.DEFAULT.foreground(color);

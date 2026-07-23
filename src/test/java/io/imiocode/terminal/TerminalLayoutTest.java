@@ -36,6 +36,10 @@ class TerminalLayoutTest {
                     () -> "宽度 " + width + " 越界: " + line));
             assertTrue(TerminalLayout.columns(layout.inputTop(width, mode)) <= width);
             assertTrue(TerminalLayout.columns(layout.statusLine(context, UiState.STREAMING, width, mode)) <= width);
+            assertTrue(TerminalLayout.columns(layout.statusLine(
+                    context, UiState.TOOL_WAITING, width, mode)) <= width);
+            assertTrue(TerminalLayout.columns(layout.statusLine(
+                    context, UiState.TOOL_RUNNING, width, mode)) <= width);
         }
     }
 
@@ -56,5 +60,7 @@ class TerminalLayoutTest {
         assertTrue(plain.contains("deepseek | deepseek-chat"));
         assertTrue(plain.contains(shortContext.workingDirectory().toString()));
         assertTrue(plain.contains("Error"));
+        assertTrue(layout.statusLine(shortContext, UiState.TOOL_WAITING, 100, TerminalMode.PLAIN)
+                .contains("Tool waiting"));
     }
 }

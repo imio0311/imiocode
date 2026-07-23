@@ -5,6 +5,8 @@ public enum UiState {
     READY("Ready"),
     THINKING("Thinking…"),
     STREAMING("Streaming"),
+    TOOL_WAITING("Tool waiting"),
+    TOOL_RUNNING("Tool running"),
     ERROR("Error");
 
     private final String label;

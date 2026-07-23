@@ -11,6 +11,17 @@ import io.imiocode.terminal.JLineTerminalUi;
 import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiContext;
 import io.imiocode.terminal.VersionResolver;
+import io.imiocode.tool.SecretRedactor;
+import io.imiocode.tool.ToolExecutor;
+import io.imiocode.tool.ToolLimits;
+import io.imiocode.tool.ToolRegistry;
+import io.imiocode.tool.core.BashTool;
+import io.imiocode.tool.core.EditFileTool;
+import io.imiocode.tool.core.GlobTool;
+import io.imiocode.tool.core.GrepTool;
+import io.imiocode.tool.core.ReadFileTool;
+import io.imiocode.tool.core.WriteFileTool;
+import io.imiocode.tool.workspace.WorkspacePolicy;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -28,20 +39,33 @@ public final class ImioCodeApplication {
 
     static int run() {
         LlmClient client = null;
+        ConversationSession session = null;
         TerminalUi terminal = null;
         try {
-            AppConfig config = new ConfigLoader().load(System.getenv());
-            client = new LlmClientFactory().create(config);
-            terminal = new JLineTerminalUi();
+            Path workspace = Path.of("").toAbsolutePath().normalize();
+            AppConfig config = new ConfigLoader().load(workspace, System.getenv());
+            ToolLimits limits = ToolLimits.defaults();
+            SecretRedactor redactor = new SecretRedactor(config.apiKey());
+            WorkspacePolicy policy = new WorkspacePolicy(workspace);
+            ToolRegistry registry = new ToolRegistry();
+            registry.register(new ReadFileTool(policy, limits, redactor));
+            registry.register(new WriteFileTool(policy, limits, redactor));
+            registry.register(new EditFileTool(policy, limits, redactor));
+            registry.register(new BashTool(policy, limits, redactor));
+            registry.register(new GlobTool(policy, limits, redactor));
+            registry.register(new GrepTool(policy, limits, redactor));
+
+            client = new LlmClientFactory().create(config, registry);
+            session = new ConversationSession(client, new ToolExecutor(registry));
+            terminal = new JLineTerminalUi(redactor);
             terminal.showWelcome(new UiContext(
                     "ImioCode",
                     VersionResolver.resolve(),
                     config.provider().configValue(),
                     config.model(),
-                    Path.of("")));
+                    workspace));
             terminal.printInfo("输入 /exit 或 /quit 退出。");
 
-            ConversationSession session = new ConversationSession(client);
             new ConversationLoop(session, terminal).run();
             return 0;
         } catch (ConfigException exception) {
@@ -57,7 +81,9 @@ public final class ImioCodeApplication {
             if (terminal != null) {
                 terminal.close();
             }
-            if (client != null) {
+            if (session != null) {
+                session.close();
+            } else if (client != null) {
                 client.close();
             }
         }

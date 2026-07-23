@@ -1,5 +1,7 @@
 package io.imiocode.terminal;
 
+import io.imiocode.tool.ToolExecutionEvent;
+
 public interface TerminalUi extends AutoCloseable {
     void showWelcome(UiContext context);
 
@@ -14,6 +16,9 @@ public interface TerminalUi extends AutoCloseable {
     void appendAssistantText(String text);
 
     void endAssistantResponse();
+
+    default void showToolEvent(ToolExecutionEvent event) {
+    }
 
     void printError(String message);
 

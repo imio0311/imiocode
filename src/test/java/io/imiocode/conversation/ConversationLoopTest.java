@@ -7,6 +7,14 @@ import io.imiocode.llm.StreamListener;
 import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiContext;
 import io.imiocode.terminal.UiState;
+import io.imiocode.tool.Tool;
+import io.imiocode.tool.ToolCall;
+import io.imiocode.tool.ToolDefinition;
+import io.imiocode.tool.ToolExecutionEvent;
+import io.imiocode.tool.ToolExecutor;
+import io.imiocode.tool.ToolRegistry;
+import io.imiocode.tool.ToolResult;
+import io.imiocode.tool.ToolRisk;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayDeque;
@@ -57,6 +65,67 @@ class ConversationLoopTest {
                 UiState.READY), terminal.states);
     }
 
+    @Test
+    void displaysToolLifecycleThenFinalResponse() {
+        ToolCall call = new ToolCall(
+                "c1", "read_file",
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                        .put("path", "a.txt"));
+        LlmClient client = new LlmClient() {
+            private int calls;
+
+            @Override
+            public ChatResponse streamChat(ChatRequest request, StreamListener listener) {
+                if (calls++ == 0) {
+                    return new ChatResponse(new ChatMessage(
+                            MessageRole.ASSISTANT, List.of(new ToolCallPart(call))));
+                }
+                listener.onTextDelta("完成");
+                return new ChatResponse("完成");
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(stubTool());
+        FakeTerminal terminal = new FakeTerminal("read", "/exit");
+
+        new ConversationLoop(
+                new ConversationSession(client, new ToolExecutor(registry)),
+                terminal).run();
+
+        assertEquals(3, terminal.toolEvents.size());
+        assertEquals(List.of(
+                UiState.THINKING,
+                UiState.TOOL_WAITING,
+                UiState.TOOL_RUNNING,
+                UiState.THINKING,
+                UiState.STREAMING,
+                UiState.READY), terminal.states);
+        assertEquals(List.of("完成"), terminal.deltas);
+    }
+
+    private static Tool stubTool() {
+        return new Tool() {
+            @Override
+            public ToolDefinition definition() {
+                return new ToolDefinition(
+                        "read_file",
+                        "测试",
+                        com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                                .put("type", "object"),
+                        ToolRisk.LOW);
+            }
+
+            @Override
+            public ToolResult execute(com.fasterxml.jackson.databind.node.ObjectNode arguments) {
+                return ToolResult.success("ok");
+            }
+        };
+    }
+
     private static final class FakeClient implements LlmClient {
         private int calls;
         private boolean failFirst;
@@ -87,6 +156,7 @@ class ConversationLoopTest {
         private final List<String> deltas = new ArrayList<>();
         private final List<String> errors = new ArrayList<>();
         private final List<UiState> states = new ArrayList<>();
+        private final List<ToolExecutionEvent> toolEvents = new ArrayList<>();
         private int beginCount;
         private int endCount;
         private Runnable interruptHandler;
@@ -129,6 +199,11 @@ class ConversationLoopTest {
         @Override
         public void endAssistantResponse() {
             endCount++;
+        }
+
+        @Override
+        public void showToolEvent(ToolExecutionEvent event) {
+            toolEvents.add(event);
         }
 
         @Override
