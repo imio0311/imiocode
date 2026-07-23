@@ -1,0 +1,16 @@
+provider: deepseek
+model: deepseek-chat
+connect-timeout-seconds: 10
+request-timeout-seconds: 120
+max-output-tokens: 4096
+
+providers:
+  openai:
+    api-key: ""
+    base-url: https://api.openai.com
+  anthropic:
+    api-key: ""
+    base-url: https://api.anthropic.com
+  deepseek:
+    api-key: ""
+    base-url: https://api.deepseek.com
