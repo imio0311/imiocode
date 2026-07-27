@@ -1,20 +1,26 @@
 package io.imiocode.conversation;
 
 import io.imiocode.tool.ToolCall;
+import io.imiocode.llm.TokenUsage;
 
 import java.util.List;
 import java.util.Objects;
 
-public record ChatResponse(ChatMessage message) {
+public record ChatResponse(ChatMessage message, TokenUsage usage) {
     public ChatResponse {
         Objects.requireNonNull(message, "message");
+        Objects.requireNonNull(usage, "usage");
         if (message.role() != MessageRole.ASSISTANT) {
             throw new IllegalArgumentException("模型回复必须是助手消息");
         }
     }
 
     public ChatResponse(String content) {
-        this(new ChatMessage(MessageRole.ASSISTANT, content));
+        this(new ChatMessage(MessageRole.ASSISTANT, content), TokenUsage.unknown());
+    }
+
+    public ChatResponse(ChatMessage message) {
+        this(message, TokenUsage.unknown());
     }
 
     public String content() {

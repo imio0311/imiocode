@@ -36,7 +36,17 @@ public final class MockLlmServer implements AutoCloseable {
     }
 
     public void enqueue(int status, String contentType, List<String> chunks, long delayMillis) {
-        responses.add(new ResponseSpec(status, contentType, List.copyOf(chunks), delayMillis));
+        enqueue(status, contentType, chunks, delayMillis, Map.of());
+    }
+
+    public void enqueue(
+            int status,
+            String contentType,
+            List<String> chunks,
+            long delayMillis,
+            Map<String, String> headers) {
+        responses.add(new ResponseSpec(
+                status, contentType, List.copyOf(chunks), delayMillis, Map.copyOf(headers)));
     }
 
     public RecordedRequest takeRequest() throws InterruptedException {
@@ -57,9 +67,10 @@ public final class MockLlmServer implements AutoCloseable {
 
         ResponseSpec response = responses.poll();
         if (response == null) {
-            response = new ResponseSpec(500, "application/json", List.of("{}"), 0);
+            response = new ResponseSpec(500, "application/json", List.of("{}"), 0, Map.of());
         }
         exchange.getResponseHeaders().set("Content-Type", response.contentType());
+        response.headers().forEach(exchange.getResponseHeaders()::set);
         exchange.sendResponseHeaders(response.status(), 0);
         try (OutputStream output = exchange.getResponseBody()) {
             for (String chunk : response.chunks()) {
@@ -88,7 +99,12 @@ public final class MockLlmServer implements AutoCloseable {
         server.stop(0);
     }
 
-    private record ResponseSpec(int status, String contentType, List<String> chunks, long delayMillis) {
+    private record ResponseSpec(
+            int status,
+            String contentType,
+            List<String> chunks,
+            long delayMillis,
+            Map<String, String> headers) {
     }
 
     public record RecordedRequest(String method, URI uri, Map<String, List<String>> headers, String body) {

@@ -26,11 +26,13 @@ public final class JLineTerminalUi implements TerminalUi {
     private final PrintWriter writer;
     private final TerminalLayout layout = new TerminalLayout();
     private final ToolSummaryFormatter toolFormatter;
+    private final UsageFormatter usageFormatter = new UsageFormatter();
     private final AtomicReference<Runnable> interruptHandler = new AtomicReference<>(() -> { });
     private final AtomicReference<UiState> state = new AtomicReference<>(UiState.READY);
     private final AtomicBoolean closed = new AtomicBoolean();
     private UiContext context;
     private boolean assistantLineOpen;
+    private boolean thinkingLineOpen;
 
     public JLineTerminalUi() throws IOException {
         this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build(),
@@ -84,6 +86,7 @@ public final class JLineTerminalUi implements TerminalUi {
             return;
         }
         finishOpenAssistantLine();
+        finishOpenThinkingLine();
         TerminalMode mode = currentMode();
         printStyled(layout.statusLine(context, next, terminalWidth(), mode), stateStyle(next), mode);
         writer.flush();
@@ -131,6 +134,7 @@ public final class JLineTerminalUi implements TerminalUi {
             return;
         }
         finishOpenAssistantLine();
+        finishOpenThinkingLine();
         TerminalMode mode = currentMode();
         String prefix = mode == TerminalMode.PLAIN ? "ImioCode> " : "ImioCode › ";
         writer.print(styledPrompt(prefix, mode));
@@ -153,11 +157,66 @@ public final class JLineTerminalUi implements TerminalUi {
     }
 
     @Override
+    public synchronized void beginThinking() {
+        if (closed.get() || thinkingLineOpen) {
+            return;
+        }
+        finishOpenAssistantLine();
+        TerminalMode mode = currentMode();
+        String prefix = mode == TerminalMode.PLAIN ? "[thinking] " : "thinking › ";
+        if (mode == TerminalMode.PLAIN) {
+            writer.print(prefix);
+        } else {
+            writer.print(new AttributedString(
+                    prefix,
+                    AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN).boldOff()).toAnsi(terminal));
+        }
+        writer.flush();
+        thinkingLineOpen = true;
+    }
+
+    @Override
+    public synchronized void appendThinkingText(String text) {
+        if (closed.get() || text == null || text.isEmpty()) {
+            return;
+        }
+        if (!thinkingLineOpen) {
+            beginThinking();
+        }
+        if (currentMode() == TerminalMode.PLAIN) {
+            writer.print(text);
+        } else {
+            writer.print(new AttributedString(
+                    text,
+                    AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN)).toAnsi(terminal));
+        }
+        writer.flush();
+    }
+
+    @Override
+    public synchronized void endThinking() {
+        finishOpenThinkingLine();
+    }
+
+    @Override
+    public synchronized void showUsage(io.imiocode.llm.TokenUsage usage) {
+        String formatted = usageFormatter.format(usage);
+        if (closed.get() || formatted.isEmpty()) {
+            return;
+        }
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        printStyled(formatted, AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN), currentMode());
+        writer.flush();
+    }
+
+    @Override
     public synchronized void showToolEvent(ToolExecutionEvent event) {
         if (closed.get()) {
             return;
         }
         finishOpenAssistantLine();
+        finishOpenThinkingLine();
         String marker = switch (event.state()) {
             case QUEUED -> "○";
             case RUNNING -> "▶";
@@ -186,6 +245,7 @@ public final class JLineTerminalUi implements TerminalUi {
             return;
         }
         finishOpenAssistantLine();
+        finishOpenThinkingLine();
         writer.println("[错误] " + message);
         writer.flush();
     }
@@ -196,6 +256,7 @@ public final class JLineTerminalUi implements TerminalUi {
             return;
         }
         finishOpenAssistantLine();
+        finishOpenThinkingLine();
         writer.println(message);
         writer.flush();
     }
@@ -267,12 +328,21 @@ public final class JLineTerminalUi implements TerminalUi {
         }
     }
 
+    private void finishOpenThinkingLine() {
+        if (thinkingLineOpen) {
+            writer.println();
+            writer.flush();
+            thinkingLineOpen = false;
+        }
+    }
+
     @Override
     public synchronized void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
         finishOpenAssistantLine();
+        finishOpenThinkingLine();
         try {
             terminal.close();
         } catch (IOException ignored) {

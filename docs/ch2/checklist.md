@@ -240,3 +240,158 @@
 - [x] `config.example.yaml` 不含真实 API Key，`.gitignore` 包含 `/config.yaml`。证据：示例文件安全测试通过；当前目录非有效 Git 工作树，无法执行 `git check-ignore`。
 - [x] API Key 未进入源码、文档、示例配置或 JAR。证据：密钥模式搜索显示仅本地 `config.yaml` 包含真实 Key，`target/*.jar` 无匹配。
 - [x] DeepSeek YAML 真实对话通过。证据：第一轮回复“已记住”，第二轮回复 `IMIO-2749`，进程退出码为 0。
+
+## 富事件流与 Thinking 增强验收
+
+> 本节验收 `spec.md` 的 F27-F42。每项必须通过运行测试、检查真实请求或观察终端行为验证；不得仅凭代码存在标记通过。
+
+### 配置与兼容性
+
+- [ ] 旧 `config.yaml` 不增加任何字段时仍能启动，Thinking 默认为关闭。（验证：使用原配置运行 `ConfigLoaderTest` 并启动可执行 JAR，检查请求不含 Thinking 字段）
+- [ ] YAML 可以配置 Thinking 开关、模式、预算、强度和摘要。（验证：运行 `YamlConfigLoaderTest`，检查五个字段映射）
+- [ ] 五个 Thinking 环境变量只覆盖各自字段，其他字段继续来自 YAML。（验证：运行混合配置测试并检查最终 `AppConfig`）
+- [ ] 非法布尔值、枚举、非正预算和 manual 小于最小预算会安全失败。（验证：运行配置失败测试，终端错误指出配置项且无密钥）
+- [ ] `config.example.yaml` 包含默认关闭的 Thinking 示例且不含真实 Key。（验证：读取示例并执行密钥模式搜索）
+
+### 统一事件协议
+
+- [ ] 一次包含 Thinking、文本、工具调用的模拟响应产生七类统一事件。（验证：运行 `LlmStreamAssemblerTest`，检查事件类型）
+- [ ] 所有事件严格保持输入顺序，未发生队列重排。（验证：记录监听器事件列表并与模拟 SSE 顺序比较）
+- [ ] 两个工具调用的 JSON 碎片交错到达时分别还原正确参数。（验证：运行交错工具聚合测试）
+- [ ] 工具参数只有在合法 JSON 完整结束后才产生 `ToolCallCompleted`。（验证：分别输入完整、截断和非法 JSON）
+- [ ] 未完成 Thinking、工具块或空响应产生协议错误且没有 `StreamCompleted`。（验证：运行聚合器失败测试）
+- [ ] 正常响应只产生一个 `StreamCompleted`，并且它是最后一个事件。（验证：统计完整事件列表）
+- [ ] `ChatResponse` 保留文本、Thinking 和工具调用的原始块顺序。（验证：检查聚合器生成的消息部分列表）
+- [ ] `ChatMessage.content()` 只返回最终回答文本，不包含 Thinking。（验证：构造混合助手消息并断言文本）
+- [ ] Usage 中未知字段与真实零值可以区分。（验证：运行 `TokenUsage`/聚合器测试，比较 `OptionalLong.empty()` 与 `OptionalLong.of(0)`）
+
+### Anthropic
+
+- [ ] Thinking 关闭时 Anthropic 请求不含 `thinking` 和 `output_config`。（验证：捕获模拟服务请求 JSON）
+- [ ] AUTO 对已知新模型发送 adaptive，对已知旧模型发送 manual 预算。（验证：运行 `AnthropicThinkingModeResolverTest` 和请求映射测试）
+- [ ] 未知模型在 Thinking 开启且 AUTO 时安全失败并提示显式设置模式。（验证：运行未知模型配置测试）
+- [ ] `thinking_delta` 按片段转换为 `ThinkingDelta`。（验证：模拟两段 Thinking SSE）
+- [ ] `signature_delta` 不显示到终端，但进入完整 Thinking 元数据。（验证：检查响应消息与捕获终端输出）
+- [ ] Thinking 块在工具结果回传请求中保持原顺序且签名逐字节不变。（验证：比较模拟服务第二次请求）
+- [ ] redacted thinking data 原样保存和回传，不作为可见文本输出。（验证：模拟 redacted 块并检查历史请求）
+- [ ] 失败工具结果使用 `is_error=true`。（验证：捕获 Anthropic 工具结果请求）
+- [ ] `message_start` 与 `message_delta` 的 Usage 合并到正常结束事件。（验证：模拟输入、输出、推理和缓存字段）
+
+### OpenAI
+
+- [ ] Thinking 关闭时 Responses 请求不含 `reasoning` 配置。（验证：捕获请求 JSON）
+- [ ] Thinking 开启时请求包含 effort、summary 和 encrypted content include。（验证：运行 OpenAI 请求映射测试）
+- [ ] reasoning summary 增量转换为 Thinking 事件并在 item 完成时结束。（验证：模拟 summary delta/done 与 output item done）
+- [ ] reasoning item ID 和 encrypted content 不显示，但保存到结构化历史。（验证：检查响应消息和终端捕获）
+- [ ] 下一次请求完整恢复 reasoning item。（验证：捕获第二次模拟请求）
+- [ ] function call 的开始、参数增量和完成分别转换为统一工具事件。（验证：运行 OpenAI 工具流测试）
+- [ ] `response.completed` 中的输入、输出、推理和缓存统计映射正确。（验证：检查 `StreamCompleted.usage`）
+- [ ] failed、incomplete 或缺少 completed 时没有正常结束事件。（验证：运行 OpenAI 失败流测试）
+
+### DeepSeek
+
+- [ ] Thinking 关闭时原有 DeepSeek 文本和工具请求格式不变。（验证：运行原请求映射回归测试）
+- [ ] Thinking 开启时发送 `thinking.type=enabled` 和配置的 reasoning effort。（验证：捕获请求 JSON）
+- [ ] `reasoning_content` 增量转换为 Thinking 事件，并在最终文本或工具前完成。（验证：模拟推理、工具、文本流）
+- [ ] 包含工具调用的助手消息在工具结果回传时带回完整 `reasoning_content`。（验证：捕获第二次请求）
+- [ ] 系统提醒作为独立 system 消息出现，不拼接用户内容。（验证：比较原始用户消息与请求 messages）
+- [ ] 最终流存在 Usage 时正确映射；不存在时保持未知。（验证：运行有 Usage 和无 Usage 两组测试）
+- [ ] 缺少合法 finish reason 或 `[DONE]` 时没有正常结束事件。（验证：运行 DeepSeek 断流测试）
+
+### 会话与系统提醒
+
+- [ ] `addSystemReminder()` 不改变当前用户消息和已提交历史。（验证：调用前后比较消息快照）
+- [ ] 首次模型请求和同轮工具结果回传携带相同提醒快照。（验证：捕获同一逻辑轮次的两次请求）
+- [ ] 本轮成功、失败或中断后提醒都被消费，下一轮不会重复。（验证：分别执行三种结果并检查下一次请求）
+- [ ] Provider 按各自协议接收提醒：OpenAI instructions、Anthropic system、DeepSeek system message。（验证：运行三家请求映射测试）
+- [ ] Thinking、签名、工具参数和失败工具状态完整进入后续请求。（验证：运行混合历史会话测试）
+- [ ] 模型第一次请求工具后按顺序执行一批工具并回传结果。（验证：运行 `ConversationSessionTest` 的多工具顺序测试）
+- [ ] 模型第二次仍请求工具时停止，不执行第二批。（验证：断言执行器只收到第一批调用）
+- [ ] 文本、Thinking 或工具参数中途失败时整轮不进入历史。（验证：比较失败前后的 `historySnapshot()`）
+- [ ] 失败轮次之后可以继续完成下一次正常请求。（验证：先模拟断流，再发送成功响应）
+
+### Retry-After 与安全
+
+- [ ] `Retry-After: 15` 解析为 15 秒。（验证：运行 `RetryAfterParserTest`）
+- [ ] 未来 HTTP 日期解析为相对等待时长。（验证：使用固定 `Instant` 运行日期测试）
+- [ ] 过去日期、负数、溢出和非法文本均按未知处理。（验证：运行解析器边界测试）
+- [ ] 只有 HTTP 429 的异常携带 Retry-After。（验证：比较 429、401、500）
+- [ ] 终端对已知等待时间显示安全建议，但不自动重试。（验证：模拟 429，检查输出和模拟服务请求次数）
+- [ ] API Key、Anthropic signature、redacted data、OpenAI encrypted content 不出现在终端、异常、测试报告和 JAR。（验证：使用唯一标记运行测试并搜索所有产物）
+- [ ] 流失败、中断和客户端关闭后均释放响应流和请求资源。（验证：运行资源关闭测试并确认无挂起线程）
+
+### 终端 UI
+
+- [ ] 富终端使用独立弱化样式显示 Thinking，最终回答仍使用 `ImioCode ›`。（验证：内存终端捕获 ANSI 输出并检查顺序）
+- [ ] dumb terminal 使用 `[thinking]`，不输出 ANSI。（验证：运行 `JLineTerminalUiTest` 的纯文本场景）
+- [ ] Thinking 完成后正确换行，不与最终回答、工具状态或输入提示重叠。（验证：模拟 Thinking → 工具 → 文本完整流程）
+- [ ] 工具协议事件不会伪装成工具执行成功，排队/运行/成功/失败仍来自执行器。（验证：比较事件到达前后的终端状态）
+- [ ] Usage 只显示 Provider 实际返回的字段，全部未知时不显示摘要。（验证：运行 `UsageFormatterTest`）
+- [ ] 一轮包含两次 Provider 请求时分别显示两次实际 Usage，不输出伪造合计。（验证：运行工具回传会话 UI 测试）
+
+### 编译、测试与回归
+
+- [ ] 主源码从干净状态编译通过。（验证：`mvn -q clean compile` 退出码 0）
+- [ ] 测试源码编译通过。（验证：`mvn -q test-compile` 退出码 0）
+- [ ] 配置测试全部通过。（验证：`mvn -q -Dtest=ConfigLoaderTest,YamlConfigLoaderTest test`）
+- [ ] 聚合器和 Retry-After 测试全部通过。（验证：`mvn -q -Dtest=LlmStreamAssemblerTest,ToolCallAssemblerTest,RetryAfterParserTest test`）
+- [ ] 三家 Provider 专项测试全部通过。（验证：`mvn -q -Dtest=OpenAiClientTest,AnthropicClientTest,DeepSeekClientTest,AnthropicThinkingModeResolverTest test`）
+- [ ] 三家 Provider 公共契约测试通过。（验证：`mvn -q -Dtest=LlmClientContractTest test`）
+- [ ] 会话与终端测试全部通过。（验证：`mvn -q -Dtest=ConversationSessionTest,ConversationLoopTest,JLineTerminalUiTest,UsageFormatterTest test`）
+- [ ] 原有 Ch3 工具测试全部通过。（验证：`mvn -q -Dtest='io.imiocode.tool.**' test` 或运行全量测试后检查报告）
+- [ ] 全量自动化测试无失败、无错误。（验证：`mvn -q clean test` 并统计 Surefire 报告）
+- [ ] 可执行 JAR 从干净状态生成。（验证：`mvn -q clean package` 且 `target/*-all.jar` 存在）
+
+### Spec AC26-AC37 映射
+
+- [ ] AC26：混合模拟流产生严格有序的七类统一事件。（验证：`LlmStreamAssemblerTest` + 三家 Provider 事件测试）
+- [ ] AC27：三家 Usage 统一，缺失字段保持未知。（验证：Provider Usage 测试 + `UsageFormatterTest`）
+- [ ] AC28：交错工具参数正确还原，非法 JSON 安全失败。（验证：`ToolCallAssemblerTest`）
+- [ ] AC29：默认不发送 Thinking；开启后按三家协议映射，普通响应不受影响。（验证：配置与 Provider 专项测试）
+- [ ] AC30：Thinking 元数据、工具参数、结果和错误状态完整回传。（验证：混合历史会话测试）
+- [ ] AC31：提醒进入下一逻辑轮次请求但不改变用户消息和历史。（验证：提醒生命周期测试）
+- [ ] AC32：秒数和日期 Retry-After 正确，非法值安全忽略且无敏感信息。（验证：解析器与安全错误测试）
+- [ ] AC33：任意流中断都没有结束事件且不污染历史。（验证：聚合器失败测试 + 会话回滚测试）
+- [ ] AC34：终端可区分 Thinking、最终回答、工具状态和实际 Usage。（验证：内存终端 + tmux 场景）
+- [ ] AC35：只执行第一批工具，第二批请求停止。（验证：`ConversationSessionTest`）
+- [ ] AC36：三家普通聊天、历史、工具、错误、中断和退出回归通过。（验证：全量自动化测试）
+- [ ] AC37：干净编译、打包、全部测试和 tmux 真实场景完成并留存证据。（验证：构建命令、Surefire 报告、tmux capture）
+
+### 端到端场景：Thinking + 工具 + 多轮
+
+- [ ] 使用支持 Thinking 的真实 Provider 配置，并确认 `thinking.enabled=true`。（验证：启动信息不显示密钥，捕获请求或使用已验证模型）
+- [ ] 在 tmux 会话 `imiocode-ch2-events` 中启动可执行 JAR。（验证：`tmux capture-pane -p -t imiocode-ch2-events` 包含启动面板和 Ready）
+- [ ] 输入“先思考，再查看当前工作目录有哪些文件，并概括项目类型”。（验证：pane 中依次出现 Thinking、Glob/Read 等工具状态和最终回答）
+- [ ] Thinking 与最终回答视觉不同，且终端未出现签名、encrypted content 或 API Key。（验证：搜索 capture 内容）
+- [ ] 工具状态按 queued、running、succeeded/failed 顺序出现，没有并发交错。（验证：逐行检查 capture）
+- [ ] 响应结束时只显示实际返回的 Usage 字段。（验证：检查 Usage 行，不存在的分类不显示为 0）
+- [ ] 第二轮输入“我刚才让你查看了什么？”，回答能延续上轮上下文。（验证：捕获第二轮回答）
+- [ ] 输入 `/exit` 后进程正常退出，无堆栈和挂起线程。（验证：检查 pane 进程状态与最终输出）
+- [ ] 按本节逐项记录实际命令、测试数量、输出摘要和未通过项。（验证：在下方新增带日期的验收报告）
+
+## 富事件流与 Thinking 增强验收报告（2026-07-27）
+
+### 已通过
+
+- [x] 干净构建、全量测试和 shaded JAR 打包通过。证据：`mvn -q clean package` 退出码 0；34 个测试套件共 127 项测试，0 失败、0 错误、1 项按环境跳过。
+- [x] Thinking 配置默认关闭，YAML 与五个环境变量可组合覆盖；非法布尔、模式和 manual 预算会安全失败。证据：`ConfigLoaderTest`、`YamlConfigLoaderTest`。
+- [x] 七类统一事件、消息块顺序、非法工具 JSON、未完成块、空响应和 Usage 未知/零值语义通过。证据：`LlmStreamAssemblerTest`、`ToolCallAssemblerTest`。
+- [x] Anthropic adaptive/manual 识别、Thinking 签名与 redacted data、Usage、提醒、结构化历史回传通过。证据：`AnthropicThinkingModeResolverTest`、`AnthropicRichEventTest`、`AnthropicClientTest`。
+- [x] OpenAI reasoning summary、item ID、encrypted content、Usage、instructions 和结构化历史回传通过。证据：`OpenAiRichEventTest`、`OpenAiClientTest`。
+- [x] DeepSeek reasoning_content、Usage、system 提醒和结构化历史回传通过。证据：`DeepSeekRichEventTest`、`DeepSeekClientTest`。
+- [x] 一次性提醒在同轮两次请求间复用、成功后消费且不写入历史；原有单批工具边界保持不变。证据：`ConversationSessionTest`。
+- [x] Retry-After 秒数、HTTP 日期和非法值解析通过；只有 429 携带等待时间，终端只给建议且不自动重试。证据：`RetryAfterParserTest`、`LlmClientContractTest`、`ConversationLoopTest`。
+- [x] dumb terminal 能区分 Thinking、最终回答、工具状态和已知 Usage，敏感元数据不进入显示。证据：`JLineTerminalUiTest`、`UsageFormatterTest`、`ConversationLoopTest`。
+- [x] 独立 Java 进程完成 Thinking → ReadFile 工具 → 工具结果回传 → 第二次模型响应 → 两段 Usage → `/exit`。证据：`ConversationLoopTest#applicationProcessCompletesLocalToolRoundTrip`。
+- [x] 缺失配置启动安全退出。证据：可执行 JAR 在无配置目录退出码为 2，提示缺少 `IMIO_PROVIDER`，无异常堆栈。
+- [x] 产物安全扫描通过。证据：生产源码与文档无 API Key 模式；可执行 JAR 不含本地 Key、测试签名或 encrypted content 标记。
+
+### 环境阻塞
+
+- [ ] tmux 真实终端验收未执行。实际检查：`Get-Command tmux` 返回不可用；`wsl -l -q` 返回 `E_ACCESSDENIED`，无法进入 Linux/tmux 环境。
+- [ ] 因上述阻塞，本次未生成 `tmux capture-pane` 证据，也未将真实 Provider 的 tmux 场景标记为通过。
+
+### 产物
+
+- `target/imiocode-0.2.0-SNAPSHOT-all.jar`（4,362,331 bytes）
+- `target/imiocode-0.2.0-SNAPSHOT.jar`

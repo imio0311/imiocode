@@ -10,14 +10,18 @@ import io.imiocode.conversation.ChatRequest;
 import io.imiocode.conversation.ChatResponse;
 import io.imiocode.conversation.MessagePart;
 import io.imiocode.conversation.MessageRole;
+import io.imiocode.conversation.OpenAiReasoningMetadata;
 import io.imiocode.conversation.TextPart;
+import io.imiocode.conversation.ThinkingPart;
 import io.imiocode.conversation.ToolCallPart;
 import io.imiocode.conversation.ToolResultPart;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
-import io.imiocode.llm.StreamListener;
-import io.imiocode.llm.ToolCallAssembler;
+import io.imiocode.llm.LlmEvent;
+import io.imiocode.llm.LlmEventListener;
+import io.imiocode.llm.LlmStreamAssembler;
+import io.imiocode.llm.TokenUsageBuilder;
 import io.imiocode.llm.ToolResultJson;
 import io.imiocode.llm.transport.HttpErrorMapper;
 import io.imiocode.llm.transport.SseEvent;
@@ -33,9 +37,13 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -80,33 +88,40 @@ public final class OpenAiClient implements LlmClient {
     }
 
     @Override
-    public ChatResponse streamChat(ChatRequest request, StreamListener listener) throws LlmException {
+    public ChatResponse streamChat(ChatRequest request, LlmEventListener listener) throws LlmException {
         ensureOpen();
         HttpRequest httpRequest = buildRequest(request);
         try {
             HttpResponse<InputStream> response = send(httpRequest);
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 try (InputStream body = response.body()) {
-                    throw errorMapper.fromStatus(response.statusCode(), readErrorCode(body));
+                    throw errorMapper.fromStatus(
+                            response.statusCode(), readErrorCode(body), response.headers(), Instant.now());
                 }
             }
 
             InputStream body = response.body();
             activeStream.set(body);
-            StringBuilder content = new StringBuilder();
-            ToolCallAssembler assembler = new ToolCallAssembler(objectMapper);
-            AtomicBoolean completed = new AtomicBoolean();
+            LlmStreamAssembler assembler = new LlmStreamAssembler(objectMapper, listener);
+            TokenUsageBuilder usage = new TokenUsageBuilder();
+            Set<Integer> toolIndexes = new TreeSet<>();
+            Set<Integer> toolDeltaSeen = new HashSet<>();
+            Map<Integer, String> reasoningIds = new HashMap<>();
+            Set<Integer> reasoningDeltaSeen = new HashSet<>();
+            AtomicReference<ChatResponse> finalResponse = new AtomicReference<>();
             try {
-                eventReader.read(body, event -> handleEvent(event, listener, content, assembler, completed));
+                eventReader.read(body, event -> handleEvent(
+                        event, assembler, usage, toolIndexes, toolDeltaSeen,
+                        reasoningIds, reasoningDeltaSeen, finalResponse));
             } catch (StreamAbort abort) {
                 throw abort.exception;
             } finally {
                 activeStream.compareAndSet(body, null);
             }
-            if (!completed.get()) {
+            if (finalResponse.get() == null) {
                 throw protocolError("OpenAI 响应流未正常完成", null);
             }
-            return completedResponse(content, assembler.finish());
+            return finalResponse.get();
         } catch (LlmException exception) {
             throw exception;
         } catch (IOException exception) {
@@ -141,6 +156,18 @@ public final class OpenAiClient implements LlmClient {
         root.put("model", config.model());
         root.put("stream", true);
         root.put("max_output_tokens", config.maxOutputTokens());
+        if (config.thinking().enabled()) {
+            ObjectNode reasoning = root.putObject("reasoning");
+            reasoning.put("effort", config.thinking().effort().apiValue());
+            reasoning.put("summary", config.thinking().summary().apiValue());
+            root.putArray("include").add("reasoning.encrypted_content");
+        }
+        if (!request.reminders().isEmpty()) {
+            String instructions = request.reminders().stream()
+                    .map(reminder -> "<system-reminder>\n" + reminder.content() + "\n</system-reminder>")
+                    .collect(java.util.stream.Collectors.joining("\n\n"));
+            root.put("instructions", instructions);
+        }
         ArrayNode input = root.putArray("input");
         for (ChatMessage message : request.messages()) {
             appendMessage(input, message);
@@ -167,6 +194,21 @@ public final class OpenAiClient implements LlmClient {
                     input.addObject()
                             .put("role", message.role().apiValue())
                             .put("content", text.text());
+                } else if (part instanceof ThinkingPart thinkingPart) {
+                    if (!(thinkingPart.metadata() instanceof OpenAiReasoningMetadata metadata)) {
+                        throw protocolError("OpenAI 历史包含不兼容的 Thinking 元数据", null);
+                    }
+                    ObjectNode reasoning = input.addObject();
+                    reasoning.put("type", "reasoning");
+                    reasoning.put("id", metadata.itemId());
+                    if (!metadata.encryptedContent().isBlank()) {
+                        reasoning.put("encrypted_content", metadata.encryptedContent());
+                    }
+                    if (!thinkingPart.text().isBlank()) {
+                        reasoning.putArray("summary").addObject()
+                                .put("type", "summary_text")
+                                .put("text", thinkingPart.text());
+                    }
                 } else if (part instanceof ToolCallPart callPart) {
                     ToolCall call = callPart.call();
                     input.addObject()
@@ -198,10 +240,13 @@ public final class OpenAiClient implements LlmClient {
 
     private void handleEvent(
             SseEvent event,
-            StreamListener listener,
-            StringBuilder content,
-            ToolCallAssembler assembler,
-            AtomicBoolean completed) {
+            LlmStreamAssembler assembler,
+            TokenUsageBuilder usage,
+            Set<Integer> toolIndexes,
+            Set<Integer> toolDeltaSeen,
+            Map<Integer, String> reasoningIds,
+            Set<Integer> reasoningDeltaSeen,
+            AtomicReference<ChatResponse> finalResponse) {
         if (event.data().isBlank()) {
             return;
         }
@@ -209,27 +254,91 @@ public final class OpenAiClient implements LlmClient {
             JsonNode node = objectMapper.readTree(event.data());
             String type = node.path("type").asText(event.event());
             switch (type) {
-                case "response.output_text.delta" -> appendDelta(node.path("delta").asText(), listener, content);
+                case "response.output_text.delta" -> assembler.emitText(node.path("delta").asText());
                 case "response.output_item.added" -> {
                     JsonNode item = node.path("item");
+                    int index = requireIndex(node, "output_index");
                     if ("function_call".equals(item.path("type").asText())) {
-                        assembler.append(
-                                requireIndex(node, "output_index"),
-                                requiredText(item, "call_id"),
-                                requiredText(item, "name"),
-                                null);
+                        toolIndexes.add(index);
+                        assembler.startTool(index, requiredText(item, "call_id"), requiredText(item, "name"));
+                    } else if ("reasoning".equals(item.path("type").asText())) {
+                        reasoningIds.put(index, requiredText(item, "id"));
+                        assembler.startThinking(index);
                     }
                 }
-                case "response.function_call_arguments.delta" -> assembler.append(
-                        requireIndex(node, "output_index"), null, null, node.path("delta").asText(""));
-                case "response.completed" -> completed.set(true);
+                case "response.reasoning_summary_text.delta" -> {
+                    int index = requireIndex(node, "output_index");
+                    reasoningDeltaSeen.add(index);
+                    assembler.appendThinking(index, node.path("delta").asText(""));
+                }
+                case "response.reasoning_summary_text.done" -> {
+                    int index = requireIndex(node, "output_index");
+                    if (!reasoningDeltaSeen.contains(index)) {
+                        assembler.appendThinking(index, node.path("text").asText(""));
+                    }
+                }
+                case "response.output_item.done" -> {
+                    JsonNode item = node.path("item");
+                    int index = requireIndex(node, "output_index");
+                    if ("reasoning".equals(item.path("type").asText()) && reasoningIds.containsKey(index)) {
+                        String id = item.path("id").asText(reasoningIds.remove(index));
+                        assembler.completeThinking(
+                                index,
+                                new OpenAiReasoningMetadata(id, item.path("encrypted_content").asText("")));
+                    }
+                }
+                case "response.function_call_arguments.delta" -> {
+                    int index = requireIndex(node, "output_index");
+                    toolDeltaSeen.add(index);
+                    assembler.appendToolArguments(index, node.path("delta").asText(""));
+                }
+                case "response.function_call_arguments.done" -> {
+                    int index = requireIndex(node, "output_index");
+                    if (!toolDeltaSeen.contains(index)) {
+                        assembler.appendToolArguments(index, node.path("arguments").asText(""));
+                    }
+                    assembler.ensureEmptyToolArguments(index);
+                    assembler.completeTool(index);
+                    toolIndexes.remove(index);
+                }
+                case "response.completed" -> {
+                    for (Integer index : Set.copyOf(toolIndexes)) {
+                        assembler.ensureEmptyToolArguments(index);
+                        assembler.completeTool(index);
+                        toolIndexes.remove(index);
+                    }
+                    for (Map.Entry<Integer, String> entry : Map.copyOf(reasoningIds).entrySet()) {
+                        assembler.completeThinking(
+                                entry.getKey(), new OpenAiReasoningMetadata(entry.getValue(), ""));
+                        reasoningIds.remove(entry.getKey());
+                    }
+                    readUsage(node.path("response").path("usage"), usage);
+                    finalResponse.set(assembler.complete(usage.build()));
+                }
                 case "response.failed", "response.incomplete", "error" -> throw abort("OpenAI 未能完成本轮响应");
                 default -> {
                     // 本章只消费文本和生命周期事件。
                 }
             }
+        } catch (LlmException exception) {
+            throw new StreamAbort(exception);
         } catch (IOException | IllegalArgumentException exception) {
             throw new StreamAbort(protocolError("OpenAI 返回了无效的工具流事件", exception));
+        }
+    }
+
+    private static void readUsage(JsonNode node, TokenUsageBuilder usage) {
+        if (node.path("input_tokens").canConvertToLong()) {
+            usage.input(node.path("input_tokens").longValue());
+        }
+        if (node.path("output_tokens").canConvertToLong()) {
+            usage.output(node.path("output_tokens").longValue());
+        }
+        if (node.path("input_tokens_details").path("cached_tokens").canConvertToLong()) {
+            usage.cacheRead(node.path("input_tokens_details").path("cached_tokens").longValue());
+        }
+        if (node.path("output_tokens_details").path("reasoning_tokens").canConvertToLong()) {
+            usage.reasoning(node.path("output_tokens_details").path("reasoning_tokens").longValue());
         }
     }
 
@@ -241,25 +350,6 @@ public final class OpenAiClient implements LlmClient {
         } catch (IOException exception) {
             return "";
         }
-    }
-
-    private static void appendDelta(String delta, StreamListener listener, StringBuilder content) {
-        if (delta != null && !delta.isEmpty()) {
-            content.append(delta);
-            listener.onTextDelta(delta);
-        }
-    }
-
-    private ChatResponse completedResponse(StringBuilder content, List<ToolCall> calls) throws LlmException {
-        List<MessagePart> parts = new ArrayList<>();
-        if (!content.isEmpty()) {
-            parts.add(new TextPart(content.toString()));
-        }
-        calls.stream().map(ToolCallPart::new).forEach(parts::add);
-        if (parts.isEmpty()) {
-            throw protocolError("OpenAI 完成响应但没有文本或工具调用", null);
-        }
-        return new ChatResponse(new ChatMessage(MessageRole.ASSISTANT, parts));
     }
 
     private static int requireIndex(JsonNode node, String field) {

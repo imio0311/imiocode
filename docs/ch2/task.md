@@ -813,3 +813,565 @@ T27 -> T28、T29、T30（具备对应 API Key 时可并行）
 - T42：已完成。新增布局、dumb 降级、多行按键和状态顺序回归测试；Java 21 全量测试通过。
 - T43：完成当前环境可执行部分。`mvn -q clean package` 成功；使用现有 DeepSeek YAML 配置运行可执行 JAR，两轮真实对话依次返回 `OK` 和 `IMIO-2749`，`/exit` 退出码为 0。
 - tmux 验收未执行：Windows 主机没有 tmux，WSL 没有已安装发行版；未擅自安装系统组件。富终端宽度与布局由内存终端和纯渲染测试覆盖，仍需在具备 tmux 的环境补一次人工交互验收。
+
+## 富事件流与 Thinking 增强任务（2026-07-27）
+
+> 本节对应 `spec.md` 的 F27-F42 和 `plan.md` 的“富事件流与 Thinking 增强”。任务编号延续现有清单，从 T44 开始。四份文档全部获批之前不得执行下列实现任务。
+
+### 增量文件清单
+
+| 操作 | 文件 | 职责 |
+|------|------|------|
+| 新建 | `src/main/java/io/imiocode/config/ThinkingConfig.java` | Thinking 开关、模式、预算、强度与摘要配置 |
+| 新建 | `src/main/java/io/imiocode/config/ThinkingMode.java` | AUTO、ADAPTIVE、MANUAL |
+| 新建 | `src/main/java/io/imiocode/config/ReasoningEffort.java` | LOW、MEDIUM、HIGH |
+| 新建 | `src/main/java/io/imiocode/config/ReasoningSummary.java` | AUTO、CONCISE、DETAILED |
+| 修改 | `src/main/java/io/imiocode/config/AppConfig.java` | 持有 ThinkingConfig 并保留旧构造器 |
+| 修改 | `src/main/java/io/imiocode/config/ConfigDocument.java` | 读取 YAML thinking 节点 |
+| 修改 | `src/main/java/io/imiocode/config/ConfigLoader.java` | 合并环境变量、默认值和校验 |
+| 新建 | `src/main/java/io/imiocode/conversation/ThinkingPart.java` | 结构化推理消息部分 |
+| 新建 | `src/main/java/io/imiocode/conversation/ThinkingMetadata.java` | 推理元数据 sealed 接口 |
+| 新建 | `src/main/java/io/imiocode/conversation/AnthropicThinkingMetadata.java` | Anthropic 签名与 redacted data |
+| 新建 | `src/main/java/io/imiocode/conversation/OpenAiReasoningMetadata.java` | OpenAI reasoning item 元数据 |
+| 新建 | `src/main/java/io/imiocode/conversation/DeepSeekReasoningMetadata.java` | DeepSeek 推理标记 |
+| 新建 | `src/main/java/io/imiocode/conversation/SystemReminder.java` | 一次性内部提醒 |
+| 修改 | `src/main/java/io/imiocode/conversation/MessagePart.java` | 允许 ThinkingPart |
+| 修改 | `src/main/java/io/imiocode/conversation/ChatMessage.java` | 校验 Thinking 与角色 |
+| 修改 | `src/main/java/io/imiocode/conversation/ChatRequest.java` | 消息与提醒 |
+| 修改 | `src/main/java/io/imiocode/conversation/ChatResponse.java` | 消息与 Usage |
+| 修改 | `src/main/java/io/imiocode/conversation/ConversationListener.java` | 接收统一 LLM 事件 |
+| 修改 | `src/main/java/io/imiocode/conversation/ConversationSession.java` | 提醒、事件桥接和历史提交 |
+| 修改 | `src/main/java/io/imiocode/conversation/ConversationException.java` | 透传 Retry-After |
+| 修改 | `src/main/java/io/imiocode/conversation/ConversationLoop.java` | 富事件到终端的路由 |
+| 新建 | `src/main/java/io/imiocode/llm/LlmEvent.java` | 七类统一流事件 |
+| 新建 | `src/main/java/io/imiocode/llm/LlmEventListener.java` | 统一事件监听器 |
+| 新建 | `src/main/java/io/imiocode/llm/TokenUsage.java` | 可区分未知值的 Usage |
+| 新建 | `src/main/java/io/imiocode/llm/TokenUsageBuilder.java` | Provider 内部增量收集 |
+| 新建 | `src/main/java/io/imiocode/llm/LlmStreamAssembler.java` | 统一流状态机 |
+| 修改 | `src/main/java/io/imiocode/llm/LlmClient.java` | 使用统一事件监听器 |
+| 修改 | `src/main/java/io/imiocode/llm/StreamListener.java` | 文本兼容适配器 |
+| 修改 | `src/main/java/io/imiocode/llm/ToolCallAssembler.java` | 支持逐调用完成与校验 |
+| 修改 | `src/main/java/io/imiocode/llm/LlmException.java` | 可选 Retry-After |
+| 新建 | `src/main/java/io/imiocode/llm/transport/RetryAfterParser.java` | 秒数和 HTTP 日期解析 |
+| 修改 | `src/main/java/io/imiocode/llm/transport/HttpErrorMapper.java` | 读取 429 响应头 |
+| 新建 | `src/main/java/io/imiocode/llm/provider/anthropic/AnthropicThinkingModeResolver.java` | Anthropic 模式选择 |
+| 修改 | `src/main/java/io/imiocode/llm/provider/anthropic/AnthropicClient.java` | Thinking、Usage、提醒与统一事件 |
+| 修改 | `src/main/java/io/imiocode/llm/provider/openai/OpenAiClient.java` | reasoning、Usage、提醒与统一事件 |
+| 修改 | `src/main/java/io/imiocode/llm/provider/deepseek/DeepSeekClient.java` | reasoning_content、Usage、提醒与统一事件 |
+| 新建 | `src/main/java/io/imiocode/terminal/UsageFormatter.java` | 格式化已知 Usage |
+| 修改 | `src/main/java/io/imiocode/terminal/TerminalUi.java` | Thinking 与 Usage 接口 |
+| 修改 | `src/main/java/io/imiocode/terminal/JLineTerminalUi.java` | Thinking、Usage 和纯文本降级 |
+| 修改 | `config.example.yaml` | 安全的 Thinking 配置示例 |
+| 新建 | `src/test/java/io/imiocode/llm/LlmStreamAssemblerTest.java` | 聚合器生命周期与回滚 |
+| 新建 | `src/test/java/io/imiocode/llm/transport/RetryAfterParserTest.java` | 两种 Retry-After 格式 |
+| 新建 | `src/test/java/io/imiocode/llm/provider/anthropic/AnthropicThinkingModeResolverTest.java` | Anthropic 模式选择 |
+| 新建 | `src/test/java/io/imiocode/terminal/UsageFormatterTest.java` | Usage 未知值格式化 |
+| 修改 | `src/test/java/io/imiocode/config/ConfigLoaderTest.java` | 环境变量与默认配置 |
+| 修改 | `src/test/java/io/imiocode/config/YamlConfigLoaderTest.java` | YAML thinking 节点 |
+| 修改 | `src/test/java/io/imiocode/llm/ToolCallAssemblerTest.java` | 逐调用完成、交错碎片 |
+| 修改 | `src/test/java/io/imiocode/llm/LlmClientContractTest.java` | 七类公共事件契约 |
+| 修改 | `src/test/java/io/imiocode/llm/provider/anthropic/AnthropicClientTest.java` | Anthropic 新协议 |
+| 修改 | `src/test/java/io/imiocode/llm/provider/openai/OpenAiClientTest.java` | OpenAI 新协议 |
+| 修改 | `src/test/java/io/imiocode/llm/provider/deepseek/DeepSeekClientTest.java` | DeepSeek 新协议 |
+| 修改 | `src/test/java/io/imiocode/conversation/ConversationSessionTest.java` | 提醒、Thinking 历史与回滚 |
+| 修改 | `src/test/java/io/imiocode/conversation/ConversationLoopTest.java` | 富事件 UI 路由 |
+| 修改 | `src/test/java/io/imiocode/terminal/JLineTerminalUiTest.java` | Thinking、Usage 与敏感字段 |
+
+### T44：定义 Thinking 配置值对象
+
+**文件：** `ThinkingConfig.java`、`ThinkingMode.java`、`ReasoningEffort.java`、`ReasoningSummary.java`、`AppConfig.java`
+
+**依赖：** 无
+
+**步骤：**
+1. 定义三个枚举并提供大小写不敏感的安全解析入口。
+2. 定义 `ThinkingConfig`，校验预算为正数，并提供 `disabled()` 默认值。
+3. 在 `AppConfig` 中增加 Thinking 配置，同时保留原七参数构造器并默认关闭 Thinking。
+4. 确保 `toString()` 不输出 API Key 或推理元数据。
+
+**验证：** `mvn -q -DskipTests compile` 退出码为 0，现有调用方无需修改即可编译。
+
+### T45：接入 YAML 与环境变量配置合并
+
+**文件：** `ConfigDocument.java`、`ConfigLoader.java`
+
+**依赖：** T44
+
+**步骤：**
+1. 在配置文档中加入可选 `thinking` 节点及五个字段。
+2. 按“环境变量 > YAML > 默认值”逐字段合并 Thinking 配置。
+3. 默认 `enabled=false`、`mode=auto`、预算 1024、强度 high、摘要 auto。
+4. Thinking 关闭时不得因模型名或预算模式阻止旧配置启动。
+
+**验证：** `mvn -q -Dtest=ConfigLoaderTest,YamlConfigLoaderTest test` 退出码为 0。
+
+### T46：补齐 Thinking 配置测试与示例
+
+**文件：** `ConfigLoaderTest.java`、`YamlConfigLoaderTest.java`、`config.example.yaml`
+
+**依赖：** T45
+
+**步骤：**
+1. 覆盖默认关闭、完整 YAML、局部环境变量覆盖和非法布尔/枚举/预算。
+2. 验证旧 YAML 不包含 `thinking` 时仍得到关闭配置。
+3. 在示例配置中加入关闭状态的安全示例，不添加真实密钥。
+
+**验证：** `mvn -q -Dtest=ConfigLoaderTest,YamlConfigLoaderTest test` 全部通过。
+
+### T47：定义 Usage 与七类统一事件
+
+**文件：** `TokenUsage.java`、`TokenUsageBuilder.java`、`LlmEvent.java`、`LlmEventListener.java`
+
+**依赖：** 无
+
+**步骤：**
+1. 使用 `OptionalLong` 定义五类 Token 统计及 `unknown()`。
+2. 实现 Provider 使用的增量 Builder，拒绝负数。
+3. 在 sealed interface 中定义七种不可变嵌套事件。
+4. 校验索引、非空文本、工具 ID 和工具名称。
+
+**验证：** `mvn -q -DskipTests compile` 退出码为 0。
+
+### T48：扩展结构化 Thinking 消息
+
+**文件：** `ThinkingPart.java`、`ThinkingMetadata.java`、三个 Provider 元数据文件、`MessagePart.java`、`ChatMessage.java`
+
+**依赖：** 无
+
+**步骤：**
+1. 定义三家 Provider 的不可变 Thinking 元数据类型。
+2. 允许空的可见文本仅用于 redacted 块，但元数据不能为空。
+3. 扩展 sealed `MessagePart` 和角色校验，只有助手消息允许 Thinking。
+4. 保持 `content()` 只返回最终 `TextPart`。
+
+**验证：** `mvn -q -Dtest=ConversationSessionTest test` 通过，普通文本行为不变。
+
+### T49：扩展请求、响应和系统提醒模型
+
+**文件：** `SystemReminder.java`、`ChatRequest.java`、`ChatResponse.java`
+
+**依赖：** T47、T48
+
+**步骤：**
+1. 定义非空 `SystemReminder`。
+2. 给请求增加不可变提醒列表并保留单参数构造器。
+3. 给响应增加 `TokenUsage` 并保留原构造入口。
+4. 对所有列表执行防御性复制。
+
+**验证：** `mvn -q -DskipTests compile` 退出码为 0。
+
+### T50：升级工具参数聚合器
+
+**文件：** `ToolCallAssembler.java`、`ToolCallAssemblerTest.java`
+
+**依赖：** 无
+
+**步骤：**
+1. 增加显式开始、追加、完成和未完成检查。
+2. 按索引隔离 ID、名称和 JSON 缓冲区。
+3. 完成单个工具时立即解析 JSON；重复完成、缺字段和非法 JSON 均失败。
+4. 保留现有 `finish()` 兼容行为。
+
+**验证：** `mvn -q -Dtest=ToolCallAssemblerTest test` 全部通过。
+
+### T51：实现统一流聚合器
+
+**文件：** `LlmStreamAssembler.java`
+
+**依赖：** T47、T48、T49、T50
+
+**步骤：**
+1. 实现连续文本缓冲、Thinking 状态和工具状态。
+2. 每次状态变化同步发布对应 `LlmEvent`。
+3. 开始非文本块前提交连续文本，保持消息部分顺序。
+4. `complete()` 校验完整性、构造响应并最后发布唯一完成事件。
+
+**验证：** `mvn -q -DskipTests compile` 退出码为 0。
+
+### T52：覆盖统一流聚合器边界
+
+**文件：** `LlmStreamAssemblerTest.java`
+
+**依赖：** T51
+
+**步骤：**
+1. 测试 Thinking、文本、工具和结束事件的严格顺序。
+2. 测试两个工具交错参数碎片的独立还原。
+3. 测试未完成块、非法 JSON、重复生命周期和空响应。
+4. 验证失败场景没有完成事件，Usage 未知值保持未知。
+
+**验证：** `mvn -q -Dtest=LlmStreamAssemblerTest test` 全部通过。
+
+### T53：迁移 LLM 监听契约并保留文本适配
+
+**文件：** `LlmClient.java`、`StreamListener.java`、三个 Provider 客户端、`LlmClientContractTest.java`
+
+**依赖：** T47、T49、T51
+
+**步骤：**
+1. 把 `LlmClient` 监听参数改为 `LlmEventListener`。
+2. 让 `StreamListener` 实现事件监听接口并只筛选 `TextDelta`。
+3. 三个 Provider 暂时把现有文本增量转换为 `TextDelta`。
+4. 更新公共契约测试使用事件监听器并断言文本顺序。
+
+**验证：** `mvn -q -Dtest=LlmClientContractTest test` 中三家文本契约通过。
+
+### T54：实现 Retry-After 解析器
+
+**文件：** `RetryAfterParser.java`、`RetryAfterParserTest.java`
+
+**依赖：** 无
+
+**步骤：**
+1. 支持非负十进制秒数。
+2. 支持 RFC HTTP 日期并根据传入 `Instant` 计算等待时间。
+3. 非法值、负数、溢出和过去日期返回空。
+4. 使用固定时间覆盖时区和边界场景。
+
+**验证：** `mvn -q -Dtest=RetryAfterParserTest test` 全部通过。
+
+### T55：把 Retry-After 接入统一错误
+
+**文件：** `LlmException.java`、`HttpErrorMapper.java`、三个 Provider 客户端、`ConversationException.java`
+
+**依赖：** T54
+
+**步骤：**
+1. 给 `LlmException` 增加可选等待时长并保留旧构造器。
+2. 错误映射器接收响应头和当前时间，只在 429 设置等待时长。
+3. 三个 Provider 把 HTTP 响应头交给错误映射器。
+4. 会话异常安全透传等待时长。
+
+**验证：** `mvn -q -Dtest=OpenAiClientTest,AnthropicClientTest,DeepSeekClientTest test` 通过。
+
+### T56：覆盖 Retry-After 与敏感错误
+
+**文件：** 三个 Provider 客户端测试
+
+**依赖：** T55
+
+**步骤：**
+1. 三家客户端分别测试 429 秒数格式。
+2. 至少一家测试 HTTP 日期和非法格式。
+3. 验证非 429 不携带等待时间。
+4. 验证异常文本不包含 API Key、响应头或原始错误正文。
+
+**验证：** `mvn -q -Dtest=OpenAiClientTest,AnthropicClientTest,DeepSeekClientTest test` 全部通过。
+
+### T57：实现 Anthropic Thinking 模式选择
+
+**文件：** `AnthropicThinkingModeResolver.java`、`AnthropicThinkingModeResolverTest.java`
+
+**依赖：** T44
+
+**步骤：**
+1. 显式 `ADAPTIVE`、`MANUAL` 直接返回。
+2. AUTO 对已知 4.6 及更新模型选择 adaptive，对已知 4.5 及更早模型选择 manual。
+3. Thinking 关闭时不解析模型能力。
+4. 开启状态下未知模型返回安全配置错误。
+
+**验证：** `mvn -q -Dtest=AnthropicThinkingModeResolverTest test` 全部通过。
+
+### T58：编码 Anthropic Thinking、提醒和历史
+
+**文件：** `AnthropicClient.java`
+
+**依赖：** T49、T53、T57
+
+**步骤：**
+1. 按 resolved mode 编码 adaptive 或 manual，关闭时不发送 Thinking。
+2. 系统提醒编码到顶层 `system` 并使用 `<system-reminder>` 包裹。
+3. 按原顺序编码 Thinking、文本、工具调用和工具结果。
+4. 签名和 redacted data 原样回传；失败工具结果设置 `is_error=true`。
+
+**验证：** `mvn -q -Dtest=AnthropicClientTest test` 通过。
+
+### T59：映射 Anthropic 富事件与 Usage
+
+**文件：** `AnthropicClient.java`
+
+**依赖：** T51、T58
+
+**步骤：**
+1. 使用统一聚合器替换本地文本与工具完成缓冲。
+2. 映射 thinking、signature、redacted thinking、text 和 tool 生命周期。
+3. 从 `message_start` 和 `message_delta` 收集 Usage。
+4. 只有 `message_stop` 且所有块完整时正常完成。
+
+**验证：** `mvn -q -Dtest=AnthropicClientTest test` 通过。
+
+### T60：覆盖 Anthropic 新协议
+
+**文件：** `AnthropicClientTest.java`
+
+**依赖：** T59
+
+**步骤：**
+1. 覆盖 adaptive、manual 和关闭三种请求 JSON。
+2. 覆盖 Thinking 增量、签名、redacted data、Usage 和工具顺序。
+3. 验证下一次请求原样带回签名和失败工具 `is_error`。
+4. 覆盖签名缺失、块未结束和异常流。
+
+**验证：** `mvn -q -Dtest=AnthropicClientTest test` 全部通过。
+
+### T61：编码 OpenAI reasoning、提醒和历史
+
+**文件：** `OpenAiClient.java`
+
+**依赖：** T44、T49、T53
+
+**步骤：**
+1. Thinking 开启时编码 `reasoning.effort`、`reasoning.summary` 和 encrypted content include。
+2. 关闭时不发送 reasoning 配置。
+3. 系统提醒编码到 `instructions`，不改变用户 input。
+4. 历史 OpenAI Thinking 恢复为 reasoning item。
+
+**验证：** `mvn -q -Dtest=OpenAiClientTest test` 通过。
+
+### T62：映射 OpenAI 富事件与 Usage
+
+**文件：** `OpenAiClient.java`
+
+**依赖：** T51、T61
+
+**步骤：**
+1. 使用统一聚合器映射 reasoning item、summary delta 和 item done。
+2. 映射 function call 开始、参数增量和参数完成。
+3. 从 `response.completed.response.usage` 提取输入、输出、推理和缓存 Token。
+4. failed、incomplete、error 或缺少 completed 时失败且不产生完成事件。
+
+**验证：** `mvn -q -Dtest=OpenAiClientTest test` 通过。
+
+### T63：覆盖 OpenAI 新协议
+
+**文件：** `OpenAiClientTest.java`
+
+**依赖：** T62
+
+**步骤：**
+1. 覆盖 reasoning 开关、effort、summary、instructions 和 include。
+2. 覆盖 summary 增量、encrypted content、工具事件与 Usage 顺序。
+3. 验证下一次请求恢复 reasoning item。
+4. 覆盖非法参数 JSON、缺失完成事件和错误流。
+
+**验证：** `mvn -q -Dtest=OpenAiClientTest test` 全部通过。
+
+### T64：编码 DeepSeek reasoning、提醒和历史
+
+**文件：** `DeepSeekClient.java`
+
+**依赖：** T44、T49、T53
+
+**步骤：**
+1. Thinking 开启时编码 `thinking.type=enabled` 和 `reasoning_effort`。
+2. 关闭时保持当前请求 JSON 行为。
+3. 系统提醒作为独立 system 消息插入最前面。
+4. 助手 Thinking 编码为 `reasoning_content`，工具调用中间消息也必须保留。
+
+**验证：** `mvn -q -Dtest=DeepSeekClientTest test` 通过。
+
+### T65：映射 DeepSeek 富事件与 Usage
+
+**文件：** `DeepSeekClient.java`
+
+**依赖：** T51、T64
+
+**步骤：**
+1. 首个 reasoning_content 建立 Thinking，后续碎片增量发布。
+2. 首个文本、工具调用或结束前完成 Thinking。
+3. 工具调用按索引发布开始、增量和完成事件。
+4. 收集最终块 Usage；合法 finish reason 与 `[DONE]` 同时满足后完成。
+
+**验证：** `mvn -q -Dtest=DeepSeekClientTest test` 通过。
+
+### T66：覆盖 DeepSeek 新协议
+
+**文件：** `DeepSeekClientTest.java`
+
+**依赖：** T65
+
+**步骤：**
+1. 覆盖 Thinking 开关、system 消息和 reasoning_content 历史回传。
+2. 覆盖推理、文本、工具和 Usage 的事件顺序。
+3. 验证缺失 Usage 时保持未知。
+4. 覆盖缺 finish reason、缺 `[DONE]`、非法 JSON 和异常流。
+
+**验证：** `mvn -q -Dtest=DeepSeekClientTest test` 全部通过。
+
+### T67：接入会话富事件与一次性提醒
+
+**文件：** `ConversationListener.java`、`ConversationSession.java`
+
+**依赖：** T53、T60、T63、T66
+
+**步骤：**
+1. 把会话监听器改为统一 LLM 事件入口并保留工具执行事件。
+2. 增加线程安全的 `addSystemReminder()` 和轮次提醒快照。
+3. 首次请求及工具结果回传共享提醒快照。
+4. 旧文本发送入口通过 `StreamListener` 只转发文本事件。
+
+**验证：** `mvn -q -Dtest=ConversationSessionTest test` 通过。
+
+### T68：保留 Thinking 历史、Usage 和错误元信息
+
+**文件：** `ConversationSession.java`、`ConversationException.java`
+
+**依赖：** T55、T67
+
+**步骤：**
+1. 将 Provider 返回的完整结构化助手消息直接加入临时轮次。
+2. 工具回传后保留第一响应的 Thinking 和工具调用顺序。
+3. 成功后原子提交，失败、中断或第二批工具请求时不提交。
+4. 所有退出路径清除本轮提醒并安全透传 Retry-After。
+
+**验证：** `mvn -q -Dtest=ConversationSessionTest test` 通过。
+
+### T69：覆盖会话提醒与 Thinking 回归
+
+**文件：** `ConversationSessionTest.java`
+
+**依赖：** T68
+
+**步骤：**
+1. 验证提醒进入首次请求和工具结果回传，但不进入历史。
+2. 验证下一轮不重复已消费提醒。
+3. 验证 Thinking 元数据和失败工具状态完整进入后续请求。
+4. 验证流中断后整轮回滚，Retry-After 可读取。
+
+**验证：** `mvn -q -Dtest=ConversationSessionTest test` 全部通过。
+
+### T70：实现 Thinking 与 Usage 终端展示
+
+**文件：** `UsageFormatter.java`、`TerminalUi.java`、`JLineTerminalUi.java`、`UsageFormatterTest.java`
+
+**依赖：** T47
+
+**步骤：**
+1. Usage 格式化器只输出已知字段，无已知字段时不输出。
+2. 扩展终端接口的 Thinking 生命周期和 Usage 展示方法。
+3. 富终端使用弱化样式，dumb terminal 使用 `[thinking]`。
+4. 输出不得包含 Thinking 元数据或原始工具参数碎片。
+
+**验证：** `mvn -q -Dtest=UsageFormatterTest,JLineTerminalUiTest test` 通过。
+
+### T71：把统一事件路由到终端
+
+**文件：** `ConversationLoop.java`
+
+**依赖：** T68、T70
+
+**步骤：**
+1. ThinkingDelta 首次到达时打开推理行，ThinkingCompleted 时结束。
+2. TextDelta 首次到达时进入 Streaming 并打开助手回答行。
+3. StreamCompleted 结束活动行并显示已知 Usage。
+4. 工具协议事件只更新等待状态，执行状态继续由 ToolExecutionEvent 驱动。
+5. 429 错误存在等待时长时追加安全重试建议。
+
+**验证：** `mvn -q -Dtest=ConversationLoopTest test` 通过。
+
+### T72：覆盖终端富事件与敏感信息
+
+**文件：** `ConversationLoopTest.java`、`JLineTerminalUiTest.java`
+
+**依赖：** T71
+
+**步骤：**
+1. 覆盖 Thinking → 文本 → Usage 的可观察顺序。
+2. 覆盖仅工具响应、两次 Provider 请求和无 Usage 场景。
+3. 覆盖 dumb terminal 的 `[thinking]` 降级。
+4. 使用标记签名、encrypted content 和 API Key，断言终端输出均不包含。
+
+**验证：** `mvn -q -Dtest=ConversationLoopTest,JLineTerminalUiTest,UsageFormatterTest test` 全部通过。
+
+### T73：升级三厂商公共契约并执行回归
+
+**文件：** `LlmClientContractTest.java`、现有全部测试源码
+
+**依赖：** T46、T52、T56、T60、T63、T66、T69、T72
+
+**步骤：**
+1. 公共契约验证文本、工具生命周期、流完成和 Usage 未知语义。
+2. 允许可选 Thinking 事件缺席，不允许虚假事件。
+3. 运行全部测试并修复仅由新契约造成的兼容问题。
+4. 检查 Surefire 报告无失败、无错误。
+
+**验证：** `mvn -q clean test` 退出码为 0。
+
+### T74：构建可执行 JAR 并执行安全扫描
+
+**文件：** `pom.xml`、`target/imiocode-0.2.0-SNAPSHOT-all.jar`
+
+**依赖：** T73
+
+**步骤：**
+1. 从干净状态打包 shaded JAR。
+2. 启动缺失配置场景，确认错误安全且无堆栈。
+3. 搜索源码、测试报告和 JAR，不得出现本地 API Key、测试签名或 encrypted content 标记。
+4. 确认默认配置启动时 Thinking 关闭。
+
+**验证：** `mvn -q clean package` 退出码为 0，生成可执行 `-all.jar`。
+
+### T75：执行 tmux 富事件端到端验收
+
+**文件：** `docs/ch2/checklist.md`
+
+**依赖：** T74
+
+**步骤：**
+1. 在 tmux 中使用已配置且支持 Thinking 的 Provider 启动 ImioCode。
+2. 输入一条会触发 Thinking 和至少一个核心工具的真实请求。
+3. 观察 Thinking、最终文本、工具执行状态和 Usage 的显示顺序。
+4. 发起第二轮请求验证上下文，输入 `/exit` 并确认进程退出。
+5. 对照 checklist 记录命令、实际输出摘要、通过项和环境阻塞项。
+
+**验证：** `tmux capture-pane -p` 中可观察到独立 Thinking、工具状态、最终回答和正常退出；若环境没有 tmux，记录明确阻塞证据，不伪造通过。
+
+### 增强任务执行顺序
+
+```text
+T44 → T45 → T46
+  └──────→ T57
+
+T47 → T48 → T49
+  ├────────────→ T51 → T52
+  ├────────────→ T53
+  └────────────→ T70
+
+T50 ───────────→ T51
+T54 → T55 → T56
+
+T49 + T53 + T57 → T58 → T59 → T60 ┐
+T49 + T53       → T61 → T62 → T63 ├→ T67 → T68 → T69
+T49 + T53       → T64 → T65 → T66 ┘
+
+T68 + T70 → T71 → T72
+
+T46 + T52 + T56 + T60 + T63 + T66 + T69 + T72
+    → T73 → T74 → T75
+```
+
+### 增强覆盖追踪
+
+| 需求 | 任务 |
+|------|------|
+| F27-F28 | T47、T51-T53、T59、T62、T65 |
+| F29 | T47、T59、T62、T65、T70 |
+| F30 | T50-T52、T59、T62、T65 |
+| F31-F32 | T44-T46、T57-T66 |
+| F33-F34 | T48-T49、T58、T61、T64、T68-T69 |
+| F35 | T49、T58、T61、T64、T67-T69 |
+| F36 | T53、T60、T63、T66、T73 |
+| F37-F38 | T54-T56、T68、T71 |
+| F39 | T51-T52、T59、T62、T65、T68-T69 |
+| F40 | T70-T72、T75 |
+| F41 | T67-T69、T73 |
+| F42 | T46、T53、T60、T63、T66、T69、T72-T75 |
+
+### 增强任务自检
+
+- `plan.md` 中的每个新增组件至少有一个实现任务。
+- T44-T75 均包含明确文件、依赖、步骤和验证命令。
+- Provider 请求编码、流解析和测试分别拆开，单个任务保持聚焦。
+- 执行顺序无循环依赖。
+- 新增接口名称和 `plan.md` 一致。
+- 自动化、打包、安全扫描和 tmux 端到端均有独立任务。

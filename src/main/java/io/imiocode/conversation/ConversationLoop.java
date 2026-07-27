@@ -4,6 +4,7 @@ import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiState;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
+import io.imiocode.llm.LlmEvent;
 
 import java.util.Locale;
 import java.util.Objects;
@@ -39,6 +40,7 @@ public final class ConversationLoop {
             try {
                 session.sendWithEvents(input, new ConversationListener() {
                     private boolean responseLineStarted;
+                    private boolean thinkingLineStarted;
                     private int responseCount;
 
                     @Override
@@ -47,10 +49,15 @@ public final class ConversationLoop {
                             terminal.updateState(UiState.THINKING);
                         }
                         responseLineStarted = false;
+                        thinkingLineStarted = false;
                     }
 
                     @Override
                     public void onTextDelta(String text) {
+                        if (thinkingLineStarted) {
+                            terminal.endThinking();
+                            thinkingLineStarted = false;
+                        }
                         if (!responseLineStarted) {
                             responseLineStarted = true;
                             terminal.updateState(UiState.STREAMING);
@@ -60,7 +67,32 @@ public final class ConversationLoop {
                     }
 
                     @Override
+                    public void onLlmEvent(LlmEvent event) {
+                        if (event instanceof LlmEvent.TextDelta delta) {
+                            onTextDelta(delta.text());
+                        } else if (event instanceof LlmEvent.ThinkingDelta delta) {
+                            if (!thinkingLineStarted) {
+                                thinkingLineStarted = true;
+                                terminal.beginThinking();
+                            }
+                            terminal.appendThinkingText(delta.text());
+                        } else if (event instanceof LlmEvent.ThinkingCompleted) {
+                            terminal.endThinking();
+                            thinkingLineStarted = false;
+                        } else if (event instanceof LlmEvent.ToolCallStarted) {
+                            terminal.endThinking();
+                            terminal.endAssistantResponse();
+                            terminal.updateState(UiState.TOOL_WAITING);
+                        } else if (event instanceof LlmEvent.StreamCompleted completed) {
+                            terminal.endThinking();
+                            terminal.endAssistantResponse();
+                            terminal.showUsage(completed.usage());
+                        }
+                    }
+
+                    @Override
                     public void onResponseCompleted() {
+                        terminal.endThinking();
                         terminal.endAssistantResponse();
                     }
 
@@ -85,6 +117,10 @@ public final class ConversationLoop {
                 String suffix = exception.toolsExecuted()
                         ? "；工具已经执行，但本轮历史未保存"
                         : "，本轮响应未完成";
+                if (exception.retryAfter().isPresent()) {
+                    long seconds = exception.retryAfter().orElseThrow().toSeconds();
+                    suffix += "；建议 " + seconds + " 秒后重试";
+                }
                 terminal.printError(exception.safeMessage() + suffix);
                 if (!exception.recoverable()) {
                     requestStop();

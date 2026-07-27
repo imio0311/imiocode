@@ -4,6 +4,13 @@ connect-timeout-seconds: 10
 request-timeout-seconds: 120
 max-output-tokens: 4096
 
+thinking:
+  enabled: false
+  mode: auto
+  budget-tokens: 1024
+  effort: high
+  summary: auto
+
 providers:
   openai:
     api-key: ""

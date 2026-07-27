@@ -5,6 +5,7 @@ import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
 import io.imiocode.tool.ToolResult;
+import io.imiocode.llm.TokenUsageBuilder;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.terminal.Terminal;
@@ -82,6 +83,35 @@ class JLineTerminalUiTest {
         assertTrue(text.contains("LOW"));
         assertTrue(text.contains("成功"));
         assertTrue(text.contains("Ready"));
+        assertTrue(!text.contains("\u001B["));
+    }
+
+    @Test
+    void rendersPlainThinkingAndKnownUsageWithoutSensitiveMetadata() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        Terminal terminal = TerminalBuilder.builder()
+                .dumb(true)
+                .type(Terminal.TYPE_DUMB)
+                .streams(new ByteArrayInputStream(new byte[0]), output)
+                .encoding(StandardCharsets.UTF_8)
+                .build();
+        JLineTerminalUi ui = new JLineTerminalUi(terminal);
+
+        ui.beginThinking();
+        ui.appendThinkingText("正在分析");
+        ui.endThinking();
+        ui.beginAssistantResponse();
+        ui.appendAssistantText("最终答案");
+        ui.endAssistantResponse();
+        ui.showUsage(new TokenUsageBuilder().input(8).output(3).build());
+        ui.close();
+
+        String text = output.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("[thinking] 正在分析"), () -> "实际输出: " + text);
+        assertTrue(text.contains("ImioCode> 最终答案"), () -> "实际输出: " + text);
+        assertTrue(text.contains("[usage] input=8 · output=3"), () -> "实际输出: " + text);
+        assertTrue(!text.contains("signature-secret"));
+        assertTrue(!text.contains("encrypted-secret"));
         assertTrue(!text.contains("\u001B["));
     }
 

@@ -594,3 +594,589 @@ src/test/java/io/imiocode/
 - `Ready → Thinking → Streaming → Ready` 及失败 `Error` 状态测试。
 - 两轮输入和回复不覆盖、dumb terminal 降级测试。
 - 发送给 LLM 的消息不得包含边框、状态或 ANSI。
+
+## 富事件流与 Thinking 增强（2026-07-27）
+
+> 本节是对前述基础 Ch2 设计的增量升级。涉及 `LlmClient`、`StreamListener`、消息模型、Provider、会话监听和终端接口的内容，以本节设计为准；未提及的基础配置、终端输入和多轮会话设计继续有效。
+
+### 架构概览
+
+```mermaid
+flowchart LR
+    A["ConversationSession<br/>历史、提醒、单批工具"] --> B["LlmClient<br/>统一请求入口"]
+    B --> C["OpenAI Adapter"]
+    B --> D["Anthropic Adapter"]
+    B --> E["DeepSeek Adapter"]
+    C --> F["统一事件流"]
+    D --> F
+    E --> F
+    F --> G["ConversationListener"]
+    G --> H["终端 UI"]
+    G --> I["响应聚合与原子历史提交"]
+```
+
+增量架构由七部分组成：
+
+1. 配置层增加默认关闭的 Thinking 配置，旧配置无需修改。
+2. LLM 契约层把文本回调升级为七类统一事件，错误仍走统一异常通道。
+3. 与 Provider 无关的流聚合器即时发布事件，同时构造完整结构化响应。
+4. 三个现有 HTTP Provider 适配器只负责请求编码和原始 SSE 到统一事件的映射。
+5. 会话层负责一次性系统提醒、历史原子提交和现有单批串行工具流程。
+6. HTTP 错误层解析 `Retry-After`，但不自动重试。
+7. 终端层区分 Thinking、最终回答、工具执行状态和 Usage。
+
+### 核心数据结构与接口
+
+#### LlmEvent
+
+```java
+public sealed interface LlmEvent permits
+        TextDelta,
+        ThinkingDelta,
+        ThinkingCompleted,
+        ToolCallStarted,
+        ToolCallDelta,
+        ToolCallCompleted,
+        StreamCompleted {
+}
+```
+
+七类事件定义：
+
+| 事件 | 字段 | 用途 |
+|------|------|------|
+| `TextDelta` | `text` | 最终回答文本增量 |
+| `ThinkingDelta` | `index`, `text` | 指定推理块的文本增量 |
+| `ThinkingCompleted` | `index`, `ThinkingPart` | 推理块及不透明元数据完成 |
+| `ToolCallStarted` | `index`, `id`, `name` | 工具调用开始 |
+| `ToolCallDelta` | `index`, `jsonFragment` | 工具参数 JSON 碎片 |
+| `ToolCallCompleted` | `index`, `ToolCall` | 工具参数校验并解析完成 |
+| `StreamCompleted` | `TokenUsage` | 整个 Provider 响应正常结束 |
+
+事件记录作为 `LlmEvent` 的嵌套 record 实现，减少公开文件数量并保持穷举匹配能力。
+
+#### LlmEventListener 与 LlmClient
+
+```java
+@FunctionalInterface
+public interface LlmEventListener {
+    void onEvent(LlmEvent event);
+}
+
+public interface LlmClient extends AutoCloseable {
+    ChatResponse streamChat(
+            ChatRequest request,
+            LlmEventListener listener) throws LlmException;
+}
+```
+
+原有 `StreamListener` 保留为兼容适配器，只把 `TextDelta` 转发给旧调用方。
+
+#### TokenUsage
+
+```java
+public record TokenUsage(
+        OptionalLong inputTokens,
+        OptionalLong outputTokens,
+        OptionalLong reasoningTokens,
+        OptionalLong cacheReadTokens,
+        OptionalLong cacheWriteTokens) {
+
+    public static TokenUsage unknown();
+    public boolean hasKnownValue();
+}
+```
+
+`OptionalLong` 用于区分真实的零值与 Provider 未提供字段。Provider 内部使用 `TokenUsageBuilder` 分阶段填充，完成时生成不可变对象。
+
+#### Thinking 消息模型
+
+```java
+public record ThinkingPart(
+        String text,
+        ThinkingMetadata metadata) implements MessagePart {
+}
+
+public sealed interface ThinkingMetadata permits
+        AnthropicThinkingMetadata,
+        OpenAiReasoningMetadata,
+        DeepSeekReasoningMetadata {
+}
+
+public record AnthropicThinkingMetadata(
+        String signature,
+        String redactedData) implements ThinkingMetadata {
+}
+
+public record OpenAiReasoningMetadata(
+        String itemId,
+        String encryptedContent) implements ThinkingMetadata {
+}
+
+public record DeepSeekReasoningMetadata()
+        implements ThinkingMetadata {
+}
+```
+
+约束：
+
+- `ASSISTANT` 消息允许 `TextPart`、`ThinkingPart` 和 `ToolCallPart`。
+- Anthropic 签名与 redacted data 原样保存和回传。
+- OpenAI 保存 reasoning item 标识及 encrypted content。
+- DeepSeek 保存显式返回的 `reasoning_content`，尤其用于工具结果回传。
+- 不透明元数据不得进入终端、普通日志和安全错误文本。
+
+#### ChatRequest、ChatResponse 与 SystemReminder
+
+```java
+public record SystemReminder(String content) {
+}
+
+public record ChatRequest(
+        List<ChatMessage> messages,
+        List<SystemReminder> reminders) {
+
+    public ChatRequest(List<ChatMessage> messages);
+}
+
+public record ChatResponse(
+        ChatMessage message,
+        TokenUsage usage) {
+
+    public ChatResponse(ChatMessage message);
+}
+```
+
+单参数构造器保持普通聊天和现有测试的兼容性。
+
+#### Thinking 配置
+
+```java
+public record ThinkingConfig(
+        boolean enabled,
+        ThinkingMode mode,
+        int budgetTokens,
+        ReasoningEffort effort,
+        ReasoningSummary summary) {
+
+    public static ThinkingConfig disabled();
+}
+
+public enum ThinkingMode {
+    AUTO, ADAPTIVE, MANUAL
+}
+
+public enum ReasoningEffort {
+    LOW, MEDIUM, HIGH
+}
+
+public enum ReasoningSummary {
+    AUTO, CONCISE, DETAILED
+}
+```
+
+YAML 入口：
+
+```yaml
+thinking:
+  enabled: false
+  mode: auto
+  budget-tokens: 1024
+  effort: high
+  summary: auto
+```
+
+环境变量入口：
+
+- `IMIO_THINKING_ENABLED`
+- `IMIO_THINKING_MODE`
+- `IMIO_THINKING_BUDGET_TOKENS`
+- `IMIO_REASONING_EFFORT`
+- `IMIO_REASONING_SUMMARY`
+
+`mode` 与 `budget-tokens` 只影响 Anthropic；OpenAI 使用 `effort` 与 `summary`；DeepSeek 使用 `enabled` 与 `effort`。
+
+#### LlmStreamAssembler
+
+```java
+public final class LlmStreamAssembler {
+    public void emitText(String delta);
+    public void startThinking(int index);
+    public void appendThinking(int index, String delta);
+    public void completeThinking(int index, ThinkingMetadata metadata);
+    public void startTool(int index, String id, String name);
+    public void appendToolArguments(int index, String jsonFragment);
+    public void completeTool(int index);
+    public ChatResponse complete(TokenUsage usage) throws LlmException;
+}
+```
+
+聚合器同步向监听器发布事件，并按原始顺序构造消息部分。开始 Thinking 或工具块前先提交当前连续文本块。只有所有推理块和工具参数均完整时，`complete()` 才能发送唯一的 `StreamCompleted`。
+
+#### ConversationListener 与提醒入口
+
+```java
+public interface ConversationListener {
+    default void onResponseStarted() {}
+    default void onLlmEvent(LlmEvent event) {}
+    default void onToolEvent(ToolExecutionEvent event) {}
+}
+
+public final class ConversationSession {
+    public void addSystemReminder(String content);
+    public ChatResponse sendWithEvents(
+            String userInput,
+            ConversationListener listener)
+            throws ConversationException;
+}
+```
+
+提醒在一次逻辑用户轮次开始时形成快照。本轮首次 LLM 请求和工具结果回传共享同一快照；成功、失败或中断后清除；提醒不写入会话历史。
+
+#### Retry-After
+
+```java
+public final class LlmException extends Exception {
+    public Optional<Duration> retryAfter();
+}
+
+public final class RetryAfterParser {
+    public Optional<Duration> parse(
+            String value,
+            Instant now);
+}
+```
+
+HTTP 错误映射器接收状态码、Provider 错误码和响应头。只有 429 设置等待时间；非法值、负数、溢出和过去的 HTTP 日期均按未知处理。
+
+#### TerminalUi 增量
+
+```java
+public interface TerminalUi {
+    void beginThinking();
+    void appendThinkingText(String text);
+    void endThinking();
+    void showUsage(TokenUsage usage);
+}
+```
+
+富终端使用弱化颜色与 `thinking ›` 前缀；纯文本终端使用 `[thinking]`。最终回答与工具执行状态保持现有样式。
+
+### 模块设计
+
+#### 配置模块
+
+职责：
+
+- 解析 YAML 与环境变量中的 Thinking 配置。
+- 缺失配置时使用 `ThinkingConfig.disabled()`。
+- 校验枚举、预算与 Provider 适用性。
+- 为 Anthropic 自动选择 adaptive 或 manual。
+
+Anthropic `AUTO` 规则：
+
+- 已知 4.6 及更新能力模型使用 `ADAPTIVE`。
+- 已知 4.5 及更早的 Thinking 模型使用 `MANUAL`。
+- 无法识别的自定义模型名要求用户显式设置模式。
+- `MANUAL` 预算至少为 1024 且小于 `max-output-tokens`。
+
+#### 统一事件与聚合模块
+
+`LlmStreamAssembler` 维护文本、Thinking、工具调用和 Usage 的完整状态：
+
+- 连续文本合并为有序 `TextPart`。
+- Thinking 与工具调用均按 Provider 索引隔离。
+- 相同索引不能重复开始或完成。
+- 工具完成时立即解析 JSON 并发布完成事件。
+- 未完成块、无效 JSON、重复生命周期和空响应均转换为协议错误。
+- 正常结束前完成全部状态检查。
+
+#### Anthropic Provider
+
+请求编码：
+
+- `ADAPTIVE` 发送 `thinking.type=adaptive` 和 `output_config.effort`。
+- `MANUAL` 发送 `thinking.type=enabled` 与 `budget_tokens`。
+- Thinking 关闭时不发送相关字段。
+- 历史 Thinking 块按原顺序编码，签名和 redacted data 原样回传。
+- 工具失败结果发送原生 `is_error=true`。
+- 系统提醒合并到顶层 `system`，每条使用 `<system-reminder>` 包裹。
+
+流映射：
+
+- `thinking_delta` → `ThinkingDelta`
+- `signature_delta` → 不透明元数据缓冲区
+- Thinking 内容块结束 → `ThinkingCompleted`
+- `text_delta` → `TextDelta`
+- `tool_use` 开始、`input_json_delta`、块结束 → 三种工具事件
+- `message_start`、`message_delta` → Usage 累积
+- `message_stop` → 正常完成
+
+#### OpenAI Provider
+
+请求编码：
+
+- 继续使用 Responses API。
+- Thinking 开启时发送 `reasoning.effort` 与 `reasoning.summary`。
+- 通过 `include` 请求 `reasoning.encrypted_content`。
+- 历史 `ThinkingPart` 恢复为 reasoning item。
+- 系统提醒放入 `instructions`，不拼接用户文本。
+
+流映射：
+
+- reasoning item 开始 → 建立 Thinking 块
+- `response.reasoning_summary_text.delta` → `ThinkingDelta`
+- reasoning item 完成 → 保存 ID、encrypted content 并产生 `ThinkingCompleted`
+- function call item 开始、参数增量、参数完成 → 三种工具事件
+- `response.output_text.delta` → `TextDelta`
+- `response.completed` → 提取 Usage 并正常完成
+- `response.failed`、`response.incomplete`、`error` → 协议错误
+
+#### DeepSeek Provider
+
+请求编码：
+
+- Thinking 开启时发送 `thinking.type=enabled` 与 `reasoning_effort`。
+- 助手 Thinking 编码为 `reasoning_content`。
+- 工具调用后的中间助手消息必须保留该字段。
+- 系统提醒作为独立 `system` 消息放在请求最前面。
+
+流映射：
+
+- 首个 `reasoning_content` 增量开始 Thinking。
+- 后续 `reasoning_content` → `ThinkingDelta`。
+- 首个最终文本、工具调用或流完成前结束 Thinking。
+- `content` → `TextDelta`。
+- `tool_calls` 按索引映射开始和参数增量，在 `finish_reason=tool_calls` 时完成。
+- 最终块存在 Usage 时收集，不存在时保持未知。
+- 合法 `finish_reason` 与 `[DONE]` 都出现后才正常结束。
+
+#### 会话模块
+
+- 在用户轮次开始时获取提醒快照。
+- 首次请求和工具结果回传使用同一提醒快照。
+- 把统一事件原样交给 `ConversationListener`。
+- 第一批工具继续通过 `ToolExecutor.executeAll()` 串行执行。
+- 第二次模型响应再次请求工具时沿用现有 Ch3 错误。
+- 整轮成功后原子提交用户消息、助手消息、工具结果和最终回复。
+- 成功、失败或中断后均清除本轮提醒。
+- 旧文本监听入口只筛选 `TextDelta`。
+
+#### 错误与 HTTP 模块
+
+- `RetryAfterParser` 先解析非负秒数，再解析 RFC HTTP 日期。
+- 解析器使用传入的 `Instant`，保证测试确定性。
+- `HttpErrorMapper` 只为 429 写入等待时间。
+- `ConversationException` 透传等待时间。
+- Provider 错误正文仅用于提取错误码，不传递原始内容。
+
+#### 终端模块
+
+- 首个 Thinking 增量打开独立推理行。
+- Thinking 完成后换行，最终回答继续使用 `ImioCode ›`。
+- 工具协议事件只改变状态，真正的执行过程继续由 `ToolExecutionEvent` 展示。
+- `StreamCompleted` 只展示已知 Usage 字段。
+- 每次 Provider 请求分别展示 Usage，不伪造逻辑轮次合计。
+- 签名、encrypted content 与原始参数碎片不显示。
+
+### 模块交互
+
+#### 正常对话与工具回传
+
+```mermaid
+sequenceDiagram
+    participant U as "用户"
+    participant S as "ConversationSession"
+    participant P as "Provider Client"
+    participant A as "LlmStreamAssembler"
+    participant L as "ConversationListener"
+    participant T as "Terminal UI"
+    participant X as "ToolExecutor"
+
+    U->>S: "发送用户消息"
+    S->>S: "快照本轮 system-reminder"
+    S->>P: "历史 + 提醒 + 工具"
+    P->>P: "编码请求并读取 SSE"
+    loop "每个原始流事件"
+        P->>A: "映射统一增量"
+        A->>L: "立即发布 LlmEvent"
+        L->>T: "显示推理、文本或状态"
+    end
+    A-->>P: "完整 ChatResponse"
+    P-->>S: "首个模型响应"
+    alt "包含工具调用"
+        S->>X: "串行执行第一批工具"
+        X->>T: "工具执行事件"
+        S->>P: "同一提醒 + 工具结果"
+        P-->>S: "最终模型响应"
+    end
+    S->>S: "原子提交历史并清除提醒"
+```
+
+#### 失败路径
+
+```mermaid
+flowchart LR
+    A["SSE / HTTP 异常"] --> B["Provider 安全映射"]
+    B --> C["LlmException<br/>可选 Retry-After"]
+    C --> D["ConversationException"]
+    D --> E["丢弃整轮临时消息"]
+    E --> F["清除本轮提醒"]
+    F --> G["终端显示安全错误"]
+```
+
+异常路径不调用聚合器正常完成方法，不产生 `StreamCompleted`，也不提交部分消息。
+
+### 文件组织
+
+```text
+src/main/java/io/imiocode/
+├── config/
+│   ├── AppConfig.java
+│   ├── ConfigDocument.java
+│   ├── ConfigLoader.java
+│   ├── ThinkingConfig.java
+│   ├── ThinkingMode.java
+│   ├── ReasoningEffort.java
+│   └── ReasoningSummary.java
+├── conversation/
+│   ├── MessagePart.java
+│   ├── ChatMessage.java
+│   ├── ChatRequest.java
+│   ├── ChatResponse.java
+│   ├── ThinkingPart.java
+│   ├── ThinkingMetadata.java
+│   ├── AnthropicThinkingMetadata.java
+│   ├── OpenAiReasoningMetadata.java
+│   ├── DeepSeekReasoningMetadata.java
+│   ├── SystemReminder.java
+│   ├── ConversationListener.java
+│   ├── ConversationSession.java
+│   ├── ConversationException.java
+│   └── ConversationLoop.java
+├── llm/
+│   ├── LlmClient.java
+│   ├── LlmEvent.java
+│   ├── LlmEventListener.java
+│   ├── StreamListener.java
+│   ├── TokenUsage.java
+│   ├── TokenUsageBuilder.java
+│   ├── LlmStreamAssembler.java
+│   ├── ToolCallAssembler.java
+│   ├── LlmException.java
+│   ├── provider/
+│   │   ├── anthropic/
+│   │   │   ├── AnthropicClient.java
+│   │   │   └── AnthropicThinkingModeResolver.java
+│   │   ├── openai/OpenAiClient.java
+│   │   └── deepseek/DeepSeekClient.java
+│   └── transport/
+│       ├── HttpErrorMapper.java
+│       └── RetryAfterParser.java
+└── terminal/
+    ├── TerminalUi.java
+    ├── JLineTerminalUi.java
+    └── UsageFormatter.java
+```
+
+同步修改 `config.example.yaml`。
+
+新增或重点修改的测试：
+
+```text
+src/test/java/io/imiocode/
+├── config/
+│   ├── ConfigLoaderTest.java
+│   └── YamlConfigLoaderTest.java
+├── conversation/
+│   ├── ConversationSessionTest.java
+│   └── ConversationLoopTest.java
+├── llm/
+│   ├── LlmStreamAssemblerTest.java
+│   ├── ToolCallAssemblerTest.java
+│   ├── LlmClientContractTest.java
+│   ├── provider/anthropic/
+│   │   ├── AnthropicClientTest.java
+│   │   └── AnthropicThinkingModeResolverTest.java
+│   ├── provider/openai/OpenAiClientTest.java
+│   ├── provider/deepseek/DeepSeekClientTest.java
+│   └── transport/RetryAfterParserTest.java
+└── terminal/
+    ├── JLineTerminalUiTest.java
+    └── UsageFormatterTest.java
+```
+
+### 依赖方向
+
+```text
+配置模型
+   ↓
+共享消息模型 ← 工具数据模型
+   ↓
+LLM 统一契约与流聚合
+   ↓
+三个 Provider 适配器
+   ↓
+ConversationSession
+   ↓
+ConversationLoop
+   ↓
+TerminalUi
+```
+
+约束：
+
+- Provider 不直接调用终端。
+- 终端不解析 Provider JSON。
+- 会话层只认识统一事件，不认识厂商事件名。
+- 共享消息记录不依赖会话执行器。
+- 工具执行器不依赖 Thinking 或终端。
+- `LlmStreamAssembler` 是唯一能产生正常结束事件的组件。
+
+### 技术决策
+
+| 决策点 | 选择 | 理由 |
+|--------|------|------|
+| 流接口 | 同步事件回调 + 完整响应返回 | 保持阻塞式 HTTP 架构，同时即时显示与保存完整消息 |
+| 事件模型 | sealed interface + 七种 record | 编译期穷举，避免字符串事件名泄漏 |
+| 正常结束 | 只能由统一聚合器产生 | 所有内容完整后才提交 |
+| 错误通道 | `LlmException`，无错误事件 | 正常流与失败结果清晰分离 |
+| 事件顺序 | SSE 读取线程同步发布 | 不引入队列和并发重排 |
+| Usage 未知值 | `OptionalLong` | 区分真实零值和未返回 |
+| Thinking 元数据 | 强类型、不可变、不输出 | 保证完整回传且不泄漏 |
+| Anthropic 模式 | 已知模型自动选择，未知模型显式配置 | 避免不兼容请求 |
+| OpenAI 上下文 | 请求并保存 encrypted reasoning content | 支持手动管理多轮上下文 |
+| DeepSeek Thinking | 映射并在工具轮次回传 `reasoning_content` | 满足当前 Provider 协议 |
+| 系统提醒 | Provider 原生 system/instructions | 不改变用户原始消息 |
+| 提醒生命周期 | 一次逻辑轮次共享快照 | 工具回传保持指令一致 |
+| Retry-After | 独立解析器 + 传入当前时间 | 可测试两种格式 |
+| Usage 展示 | 每个 Provider 请求分别展示 | 不伪造无法准确归属的合计 |
+| 兼容策略 | 保留旧构造器和文本监听适配器 | 渐进迁移现有 Ch2/Ch3 |
+| Provider 实现 | 保留 Java HTTP/SSE | 不引入 SDK 与额外协议栈 |
+| 验证方式 | 模拟 SSE + tmux 端到端 | 自动化覆盖边界，真实终端覆盖体验 |
+
+### 增强需求追踪
+
+| Spec | 设计归属 |
+|------|----------|
+| F27-F28 | `LlmClient`、`LlmEvent`、`LlmStreamAssembler` |
+| F29 | `TokenUsage`、三家 Usage 映射、终端格式化 |
+| F30 | `ToolCallAssembler`、统一聚合器 |
+| F31-F32 | Thinking 配置、模式选择器、三家 Provider |
+| F33-F34 | `ThinkingPart`、Provider 元数据、历史编码 |
+| F35 | `SystemReminder`、会话快照、Provider system 映射 |
+| F36 | 三家 Provider 统一事件契约测试 |
+| F37-F38 | `RetryAfterParser`、`HttpErrorMapper`、安全异常 |
+| F39 | 聚合器结束校验、会话原子提交 |
+| F40 | `TerminalUi` Thinking 与 Usage 展示 |
+| F41 | 现有单批串行工具流程 |
+| F42 | 兼容适配器与完整回归测试 |
+
+### 增强设计自检
+
+- F27-F42 均有明确模块归属。
+- 核心接口已定义到方法签名和字段级别。
+- Provider、会话、终端之间的依赖方向明确。
+- 不引入 Agent 循环、权限系统、自动重试或并发工具。
+- 新增配置默认关闭，旧配置继续有效。
+- 技术决策与已批准 Spec 一致。

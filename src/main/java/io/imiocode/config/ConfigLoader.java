@@ -11,6 +11,7 @@ public final class ConfigLoader {
     static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
     static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(120);
     static final int DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+    static final int DEFAULT_THINKING_BUDGET_TOKENS = 1024;
     private final YamlConfigLoader yamlConfigLoader;
 
     public ConfigLoader() {
@@ -57,12 +58,60 @@ public final class ConfigLoader {
                 document.maxOutputTokens(),
                 DEFAULT_MAX_OUTPUT_TOKENS,
                 "IMIO_MAX_OUTPUT_TOKENS");
+        ConfigDocument.ThinkingDocument thinkingDocument = document.thinking();
+        boolean thinkingEnabled = mergeBoolean(
+                environment.get("IMIO_THINKING_ENABLED"),
+                thinkingDocument == null ? null : thinkingDocument.enabled(),
+                false,
+                "IMIO_THINKING_ENABLED");
+        ThinkingMode thinkingMode = ThinkingMode.parse(firstNonBlank(
+                environment.get("IMIO_THINKING_MODE"),
+                thinkingDocument == null ? null : thinkingDocument.mode()));
+        int thinkingBudget = mergePositiveInt(
+                environment.get("IMIO_THINKING_BUDGET_TOKENS"),
+                thinkingDocument == null ? null : thinkingDocument.budgetTokens(),
+                DEFAULT_THINKING_BUDGET_TOKENS,
+                "IMIO_THINKING_BUDGET_TOKENS");
+        ReasoningEffort reasoningEffort = ReasoningEffort.parse(firstNonBlank(
+                environment.get("IMIO_REASONING_EFFORT"),
+                thinkingDocument == null ? null : thinkingDocument.effort()));
+        ReasoningSummary reasoningSummary = ReasoningSummary.parse(firstNonBlank(
+                environment.get("IMIO_REASONING_SUMMARY"),
+                thinkingDocument == null ? null : thinkingDocument.summary()));
+        if (thinkingEnabled && thinkingMode == ThinkingMode.MANUAL && thinkingBudget < 1024) {
+            throw new ConfigException("配置项 thinking.budget-tokens / IMIO_THINKING_BUDGET_TOKENS 不能小于 1024");
+        }
+        if (thinkingEnabled && provider == Provider.ANTHROPIC
+                && thinkingMode == ThinkingMode.MANUAL && thinkingBudget >= maxOutputTokens) {
+            throw new ConfigException("Anthropic manual Thinking 预算必须小于 max-output-tokens");
+        }
+        ThinkingConfig thinking = new ThinkingConfig(
+                thinkingEnabled, thinkingMode, thinkingBudget, reasoningEffort, reasoningSummary);
 
         try {
-            return new AppConfig(provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens);
+            return new AppConfig(
+                    provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens, thinking);
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("配置无效：" + exception.getMessage(), exception);
         }
+    }
+
+    private static boolean mergeBoolean(
+            String environmentValue,
+            Boolean yamlValue,
+            boolean defaultValue,
+            String name) {
+        if (environmentValue == null || environmentValue.isBlank()) {
+            return yamlValue == null ? defaultValue : yamlValue;
+        }
+        String normalized = environmentValue.trim().toLowerCase(java.util.Locale.ROOT);
+        if ("true".equals(normalized)) {
+            return true;
+        }
+        if ("false".equals(normalized)) {
+            return false;
+        }
+        throw new ConfigException("配置项 " + name + " 必须是 true 或 false");
     }
 
     private static String required(String value, String name) {
@@ -117,6 +166,7 @@ public final class ConfigLoader {
             case "IMIO_CONNECT_TIMEOUT_SECONDS" -> "connect-timeout-seconds";
             case "IMIO_REQUEST_TIMEOUT_SECONDS" -> "request-timeout-seconds";
             case "IMIO_MAX_OUTPUT_TOKENS" -> "max-output-tokens";
+            case "IMIO_THINKING_BUDGET_TOKENS" -> "thinking.budget-tokens";
             default -> environmentName;
         };
     }

@@ -5,19 +5,24 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.imiocode.config.AppConfig;
+import io.imiocode.config.ThinkingMode;
+import io.imiocode.conversation.AnthropicThinkingMetadata;
 import io.imiocode.conversation.ChatMessage;
 import io.imiocode.conversation.ChatRequest;
 import io.imiocode.conversation.ChatResponse;
 import io.imiocode.conversation.MessagePart;
 import io.imiocode.conversation.MessageRole;
 import io.imiocode.conversation.TextPart;
+import io.imiocode.conversation.ThinkingPart;
 import io.imiocode.conversation.ToolCallPart;
 import io.imiocode.conversation.ToolResultPart;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
-import io.imiocode.llm.StreamListener;
-import io.imiocode.llm.ToolCallAssembler;
+import io.imiocode.llm.LlmEvent;
+import io.imiocode.llm.LlmEventListener;
+import io.imiocode.llm.LlmStreamAssembler;
+import io.imiocode.llm.TokenUsageBuilder;
 import io.imiocode.llm.ToolResultJson;
 import io.imiocode.llm.transport.HttpErrorMapper;
 import io.imiocode.llm.transport.SseEvent;
@@ -33,11 +38,12 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.Objects;
+import java.util.Map;
 import java.util.Set;
+import java.util.HashSet;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -54,6 +60,7 @@ public final class AnthropicClient implements LlmClient {
     private final HttpErrorMapper errorMapper;
     private final ToolRegistry tools;
     private final ToolResultJson resultJson;
+    private final AnthropicThinkingModeResolver thinkingModeResolver = new AnthropicThinkingModeResolver();
     private final AtomicReference<CompletableFuture<HttpResponse<InputStream>>> activeRequest = new AtomicReference<>();
     private final AtomicReference<InputStream> activeStream = new AtomicReference<>();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -84,37 +91,38 @@ public final class AnthropicClient implements LlmClient {
     }
 
     @Override
-    public ChatResponse streamChat(ChatRequest request, StreamListener listener) throws LlmException {
+    public ChatResponse streamChat(ChatRequest request, LlmEventListener listener) throws LlmException {
         ensureOpen();
         try {
             HttpResponse<InputStream> response = send(buildRequest(request));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 try (InputStream body = response.body()) {
-                    throw errorMapper.fromStatus(response.statusCode(), readErrorCode(body));
+                    throw errorMapper.fromStatus(
+                            response.statusCode(), readErrorCode(body), response.headers(), Instant.now());
                 }
             }
 
             InputStream body = response.body();
             activeStream.set(body);
-            StringBuilder content = new StringBuilder();
-            ToolCallAssembler assembler = new ToolCallAssembler(objectMapper);
+            LlmStreamAssembler assembler = new LlmStreamAssembler(objectMapper, listener);
+            TokenUsageBuilder usage = new TokenUsageBuilder();
             Set<Integer> toolIndexes = new HashSet<>();
-            AtomicBoolean completed = new AtomicBoolean();
+            Set<Integer> thinkingIndexes = new HashSet<>();
+            Map<Integer, StringBuilder> signatures = new HashMap<>();
+            Map<Integer, String> redacted = new HashMap<>();
+            AtomicReference<ChatResponse> finalResponse = new AtomicReference<>();
             try {
-                eventReader.read(body,
-                        event -> handleEvent(event, listener, content, assembler, toolIndexes, completed));
+                eventReader.read(body, event -> handleEvent(
+                        event, assembler, usage, toolIndexes, thinkingIndexes, signatures, redacted, finalResponse));
             } catch (StreamAbort abort) {
                 throw abort.exception;
             } finally {
                 activeStream.compareAndSet(body, null);
             }
-            if (!completed.get()) {
+            if (finalResponse.get() == null) {
                 throw protocolError("Anthropic 响应流未正常完成", null);
             }
-            if (!toolIndexes.isEmpty()) {
-                throw protocolError("Anthropic 工具内容块未正常结束", null);
-            }
-            return completedResponse(content, assembler.finish());
+            return finalResponse.get();
         } catch (LlmException exception) {
             throw exception;
         } catch (IOException exception) {
@@ -149,6 +157,23 @@ public final class AnthropicClient implements LlmClient {
         root.put("model", config.model());
         root.put("stream", true);
         root.put("max_tokens", config.maxOutputTokens());
+        if (config.thinking().enabled()) {
+            ThinkingMode mode = thinkingModeResolver.resolve(config);
+            ObjectNode thinking = root.putObject("thinking");
+            if (mode == ThinkingMode.ADAPTIVE) {
+                thinking.put("type", "adaptive");
+                root.putObject("output_config").put("effort", config.thinking().effort().apiValue());
+            } else {
+                thinking.put("type", "enabled");
+                thinking.put("budget_tokens", config.thinking().budgetTokens());
+            }
+        }
+        if (!request.reminders().isEmpty()) {
+            ArrayNode system = root.putArray("system");
+            request.reminders().forEach(reminder -> system.addObject()
+                    .put("type", "text")
+                    .put("text", "<system-reminder>\n" + reminder.content() + "\n</system-reminder>"));
+        }
         ArrayNode messages = root.putArray("messages");
         for (ChatMessage message : request.messages()) {
             ObjectNode item = messages.addObject();
@@ -157,6 +182,19 @@ public final class AnthropicClient implements LlmClient {
             for (MessagePart part : message.parts()) {
                 if (part instanceof TextPart text) {
                     content.addObject().put("type", "text").put("text", text.text());
+                } else if (part instanceof ThinkingPart thinkingPart) {
+                    if (!(thinkingPart.metadata() instanceof AnthropicThinkingMetadata metadata)) {
+                        throw protocolError("Anthropic 历史包含不兼容的 Thinking 元数据", null);
+                    }
+                    ObjectNode block = content.addObject();
+                    if (!metadata.redactedData().isBlank()) {
+                        block.put("type", "redacted_thinking");
+                        block.put("data", metadata.redactedData());
+                    } else {
+                        block.put("type", "thinking");
+                        block.put("thinking", thinkingPart.text());
+                        block.put("signature", metadata.signature());
+                    }
                 } else if (part instanceof ToolCallPart callPart) {
                     ToolCall call = callPart.call();
                     ObjectNode block = content.addObject();
@@ -201,11 +239,13 @@ public final class AnthropicClient implements LlmClient {
 
     private void handleEvent(
             SseEvent event,
-            StreamListener listener,
-            StringBuilder content,
-            ToolCallAssembler assembler,
+            LlmStreamAssembler assembler,
+            TokenUsageBuilder usage,
             Set<Integer> toolIndexes,
-            AtomicBoolean completed) {
+            Set<Integer> thinkingIndexes,
+            Map<Integer, StringBuilder> signatures,
+            Map<Integer, String> redacted,
+            AtomicReference<ChatResponse> finalResponse) {
         if (event.data().isBlank()) {
             return;
         }
@@ -213,58 +253,100 @@ public final class AnthropicClient implements LlmClient {
             JsonNode node = objectMapper.readTree(event.data());
             String type = node.path("type").asText(event.event());
             switch (type) {
+                case "message_start" -> readUsage(node.path("message").path("usage"), usage);
+                case "message_delta" -> readUsage(node.path("usage"), usage);
                 case "content_block_start" -> {
                     JsonNode block = node.path("content_block");
-                    if ("tool_use".equals(block.path("type").asText())) {
-                        int index = requireIndex(node);
+                    int index = requireIndex(node);
+                    switch (block.path("type").asText()) {
+                        case "thinking" -> {
+                            thinkingIndexes.add(index);
+                            signatures.put(index, new StringBuilder(block.path("signature").asText("")));
+                            assembler.startThinking(index);
+                        }
+                        case "redacted_thinking" -> {
+                            thinkingIndexes.add(index);
+                            redacted.put(index, requiredText(block, "data"));
+                            assembler.startThinking(index);
+                        }
+                        case "tool_use" -> {
                         toolIndexes.add(index);
-                        assembler.append(
+                            assembler.startTool(
                                 index,
                                 requiredText(block, "id"),
-                                requiredText(block, "name"),
-                                null);
+                                    requiredText(block, "name"));
+                        }
+                        default -> {
+                            // 文本块无需开始事件。
+                        }
                     }
                 }
                 case "content_block_delta" -> {
                     JsonNode delta = node.path("delta");
                     if ("text_delta".equals(delta.path("type").asText())) {
-                        appendDelta(delta.path("text").asText(), listener, content);
+                        assembler.emitText(delta.path("text").asText());
+                    } else if ("thinking_delta".equals(delta.path("type").asText())) {
+                        assembler.appendThinking(requireIndex(node), delta.path("thinking").asText(""));
+                    } else if ("signature_delta".equals(delta.path("type").asText())) {
+                        int index = requireIndex(node);
+                        StringBuilder signature = signatures.get(index);
+                        if (signature == null) {
+                            throw new IllegalArgumentException("签名碎片没有对应 Thinking 块");
+                        }
+                        signature.append(delta.path("signature").asText(""));
                     } else if ("input_json_delta".equals(delta.path("type").asText())) {
                         int index = requireIndex(node);
                         if (!toolIndexes.contains(index)) {
                             throw new IllegalArgumentException("工具参数碎片没有对应的内容块");
                         }
-                        assembler.append(index, null, null, delta.path("partial_json").asText(""));
+                        assembler.appendToolArguments(index, delta.path("partial_json").asText(""));
                     }
                 }
                 case "content_block_stop" -> {
                     int index = requireIndex(node);
                     if (toolIndexes.contains(index)) {
-                        assembler.ensureEmptyArguments(index);
+                        assembler.ensureEmptyToolArguments(index);
+                        assembler.completeTool(index);
                         toolIndexes.remove(index);
+                    } else if (thinkingIndexes.remove(index)) {
+                        String redactedData = redacted.remove(index);
+                        String signature = signatures.containsKey(index)
+                                ? signatures.remove(index).toString()
+                                : "";
+                        assembler.completeThinking(
+                                index, new AnthropicThinkingMetadata(signature, redactedData));
                     }
                 }
-                case "message_stop" -> completed.set(true);
+                case "message_stop" -> finalResponse.set(assembler.complete(usage.build()));
                 case "error" -> throw new StreamAbort(protocolError("Anthropic 未能完成本轮响应", null));
                 default -> {
                     // ping、消息和内容块生命周期事件无需向上层暴露。
                 }
             }
+        } catch (LlmException exception) {
+            throw new StreamAbort(exception);
         } catch (IOException | IllegalArgumentException exception) {
             throw new StreamAbort(protocolError("Anthropic 返回了无效的工具流事件", exception));
         }
     }
 
-    private ChatResponse completedResponse(StringBuilder content, List<ToolCall> calls) throws LlmException {
-        List<MessagePart> parts = new ArrayList<>();
-        if (!content.isEmpty()) {
-            parts.add(new TextPart(content.toString()));
+    private static void readUsage(JsonNode node, TokenUsageBuilder usage) {
+        if (node.path("input_tokens").canConvertToLong()) {
+            usage.input(node.path("input_tokens").longValue());
         }
-        calls.stream().map(ToolCallPart::new).forEach(parts::add);
-        if (parts.isEmpty()) {
-            throw protocolError("Anthropic 完成响应但没有文本或工具调用", null);
+        if (node.path("output_tokens").canConvertToLong()) {
+            usage.output(node.path("output_tokens").longValue());
         }
-        return new ChatResponse(new ChatMessage(MessageRole.ASSISTANT, parts));
+        if (node.path("cache_read_input_tokens").canConvertToLong()) {
+            usage.cacheRead(node.path("cache_read_input_tokens").longValue());
+        }
+        if (node.path("cache_creation_input_tokens").canConvertToLong()) {
+            usage.cacheWrite(node.path("cache_creation_input_tokens").longValue());
+        }
+        JsonNode details = node.path("output_tokens_details");
+        if (details.path("thinking_tokens").canConvertToLong()) {
+            usage.reasoning(details.path("thinking_tokens").longValue());
+        }
     }
 
     private static int requireIndex(JsonNode node) {
@@ -290,13 +372,6 @@ public final class AnthropicClient implements LlmClient {
             return error.path("type").asText(error.path("code").asText(""));
         } catch (IOException exception) {
             return "";
-        }
-    }
-
-    private static void appendDelta(String delta, StreamListener listener, StringBuilder content) {
-        if (delta != null && !delta.isEmpty()) {
-            content.append(delta);
-            listener.onTextDelta(delta);
         }
     }
 

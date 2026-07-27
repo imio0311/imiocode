@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ConversationSession implements AutoCloseable {
     private final List<ChatMessage> history = new ArrayList<>();
+    private final List<SystemReminder> pendingReminders = new ArrayList<>();
     private final LlmClient client;
     private final ToolExecutor executor;
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -58,6 +59,11 @@ public final class ConversationSession implements AutoCloseable {
             throw new ConversationException("会话已关闭", false, true, false);
         }
         ChatMessage userMessage = new ChatMessage(MessageRole.USER, userInput);
+        List<SystemReminder> reminders;
+        synchronized (pendingReminders) {
+            reminders = List.copyOf(pendingReminders);
+            pendingReminders.clear();
+        }
         List<ChatMessage> requestMessages;
         synchronized (history) {
             requestMessages = new ArrayList<>(history);
@@ -66,7 +72,7 @@ public final class ConversationSession implements AutoCloseable {
 
         ChatResponse first;
         try {
-            first = request(new ChatRequest(requestMessages), listener);
+            first = request(new ChatRequest(requestMessages, reminders), listener);
         } catch (LlmException exception) {
             throw ConversationException.from(exception, false);
         }
@@ -97,7 +103,7 @@ public final class ConversationSession implements AutoCloseable {
 
         ChatResponse finalResponse;
         try {
-            finalResponse = request(new ChatRequest(followUp), listener);
+            finalResponse = request(new ChatRequest(followUp, reminders), listener);
         } catch (LlmException exception) {
             throw ConversationException.from(exception, true);
         }
@@ -117,7 +123,7 @@ public final class ConversationSession implements AutoCloseable {
 
     private ChatResponse request(ChatRequest request, ConversationListener listener) throws LlmException {
         listener.onResponseStarted();
-        ChatResponse response = client.streamChat(request, listener::onTextDelta);
+        ChatResponse response = client.streamChat(request, listener::onLlmEvent);
         listener.onResponseCompleted();
         return response;
     }
@@ -131,6 +137,16 @@ public final class ConversationSession implements AutoCloseable {
     public List<ChatMessage> historySnapshot() {
         synchronized (history) {
             return List.copyOf(history);
+        }
+    }
+
+    public void addSystemReminder(String content) {
+        SystemReminder reminder = new SystemReminder(content);
+        synchronized (pendingReminders) {
+            if (closed.get()) {
+                throw new IllegalStateException("会话已关闭");
+            }
+            pendingReminders.add(reminder);
         }
     }
 

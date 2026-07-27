@@ -8,16 +8,20 @@ import io.imiocode.config.AppConfig;
 import io.imiocode.conversation.ChatMessage;
 import io.imiocode.conversation.ChatRequest;
 import io.imiocode.conversation.ChatResponse;
+import io.imiocode.conversation.DeepSeekReasoningMetadata;
 import io.imiocode.conversation.MessagePart;
 import io.imiocode.conversation.MessageRole;
 import io.imiocode.conversation.TextPart;
+import io.imiocode.conversation.ThinkingPart;
 import io.imiocode.conversation.ToolCallPart;
 import io.imiocode.conversation.ToolResultPart;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
-import io.imiocode.llm.StreamListener;
-import io.imiocode.llm.ToolCallAssembler;
+import io.imiocode.llm.LlmEvent;
+import io.imiocode.llm.LlmEventListener;
+import io.imiocode.llm.LlmStreamAssembler;
+import io.imiocode.llm.TokenUsageBuilder;
 import io.imiocode.llm.ToolResultJson;
 import io.imiocode.llm.transport.HttpErrorMapper;
 import io.imiocode.llm.transport.SseEvent;
@@ -33,9 +37,11 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.Instant;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -80,34 +86,37 @@ public final class DeepSeekClient implements LlmClient {
     }
 
     @Override
-    public ChatResponse streamChat(ChatRequest request, StreamListener listener) throws LlmException {
+    public ChatResponse streamChat(ChatRequest request, LlmEventListener listener) throws LlmException {
         ensureOpen();
         try {
             HttpResponse<InputStream> response = send(buildRequest(request));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 try (InputStream body = response.body()) {
-                    throw errorMapper.fromStatus(response.statusCode(), readErrorCode(body));
+                    throw errorMapper.fromStatus(
+                            response.statusCode(), readErrorCode(body), response.headers(), Instant.now());
                 }
             }
 
             InputStream body = response.body();
             activeStream.set(body);
-            StringBuilder content = new StringBuilder();
-            ToolCallAssembler assembler = new ToolCallAssembler(objectMapper);
-            AtomicBoolean done = new AtomicBoolean();
+            LlmStreamAssembler assembler = new LlmStreamAssembler(objectMapper, listener);
+            TokenUsageBuilder usage = new TokenUsageBuilder();
+            Set<Integer> toolIndexes = new TreeSet<>();
+            AtomicBoolean reasoningStarted = new AtomicBoolean();
             AtomicBoolean finishReasonSeen = new AtomicBoolean();
+            AtomicReference<ChatResponse> finalResponse = new AtomicReference<>();
             try {
-                eventReader.read(body,
-                        event -> handleEvent(event, listener, content, assembler, done, finishReasonSeen));
+                eventReader.read(body, event -> handleEvent(
+                        event, assembler, usage, toolIndexes, reasoningStarted, finishReasonSeen, finalResponse));
             } catch (StreamAbort abort) {
                 throw abort.exception;
             } finally {
                 activeStream.compareAndSet(body, null);
             }
-            if (!done.get() || !finishReasonSeen.get()) {
+            if (finalResponse.get() == null || !finishReasonSeen.get()) {
                 throw protocolError("DeepSeek 响应流未正常完成", null);
             }
-            return completedResponse(content, assembler.finish());
+            return finalResponse.get();
         } catch (LlmException exception) {
             throw exception;
         } catch (IOException exception) {
@@ -142,7 +151,16 @@ public final class DeepSeekClient implements LlmClient {
         root.put("model", config.model());
         root.put("stream", true);
         root.put("max_tokens", config.maxOutputTokens());
+        if (config.thinking().enabled()) {
+            root.putObject("thinking").put("type", "enabled");
+            root.put("reasoning_effort", config.thinking().effort().apiValue());
+        }
         ArrayNode messages = root.putArray("messages");
+        for (var reminder : request.reminders()) {
+            messages.addObject()
+                    .put("role", "system")
+                    .put("content", "<system-reminder>\n" + reminder.content() + "\n</system-reminder>");
+        }
         for (ChatMessage message : request.messages()) {
             appendMessage(messages, message);
         }
@@ -181,8 +199,14 @@ public final class DeepSeekClient implements LlmClient {
         }
         if (message.role() == MessageRole.ASSISTANT) {
             ArrayNode calls = null;
+            StringBuilder reasoning = new StringBuilder();
             for (MessagePart part : message.parts()) {
-                if (part instanceof ToolCallPart callPart) {
+                if (part instanceof ThinkingPart thinkingPart) {
+                    if (!(thinkingPart.metadata() instanceof DeepSeekReasoningMetadata)) {
+                        throw new IllegalArgumentException("DeepSeek 历史包含不兼容的 Thinking 元数据");
+                    }
+                    reasoning.append(thinkingPart.text());
+                } else if (part instanceof ToolCallPart callPart) {
                     if (calls == null) {
                         calls = item.putArray("tool_calls");
                     }
@@ -194,6 +218,9 @@ public final class DeepSeekClient implements LlmClient {
                     function.put("name", call.name());
                     function.put("arguments", call.arguments().toString());
                 }
+            }
+            if (!reasoning.isEmpty()) {
+                item.put("reasoning_content", reasoning.toString());
             }
         }
     }
@@ -211,13 +238,26 @@ public final class DeepSeekClient implements LlmClient {
 
     private void handleEvent(
             SseEvent event,
-            StreamListener listener,
-            StringBuilder content,
-            ToolCallAssembler assembler,
-            AtomicBoolean done,
-            AtomicBoolean finishReasonSeen) {
+            LlmStreamAssembler assembler,
+            TokenUsageBuilder usage,
+            Set<Integer> toolIndexes,
+            AtomicBoolean reasoningStarted,
+            AtomicBoolean finishReasonSeen,
+            AtomicReference<ChatResponse> finalResponse) {
         if ("[DONE]".equals(event.data())) {
-            done.set(true);
+            if (finishReasonSeen.get() && finalResponse.get() == null) {
+                try {
+                    completeThinkingIfNeeded(assembler, reasoningStarted);
+                    for (Integer index : Set.copyOf(toolIndexes)) {
+                        assembler.ensureEmptyToolArguments(index);
+                        assembler.completeTool(index);
+                        toolIndexes.remove(index);
+                    }
+                    finalResponse.set(assembler.complete(usage.build()));
+                } catch (LlmException exception) {
+                    throw new StreamAbort(exception);
+                }
+            }
             return;
         }
         if (event.data().isBlank()) {
@@ -229,29 +269,51 @@ public final class DeepSeekClient implements LlmClient {
             if (!error.isMissingNode() && !error.isNull()) {
                 throw new StreamAbort(protocolError("DeepSeek 未能完成本轮响应", null));
             }
+            readUsage(node.path("usage"), usage);
             JsonNode choices = node.path("choices");
             if (!choices.isArray() || choices.isEmpty()) {
+                if (!node.path("usage").isMissingNode()) {
+                    return;
+                }
                 throw new StreamAbort(protocolError("DeepSeek 流事件缺少 choices", null));
             }
             JsonNode choice = choices.get(0);
             JsonNode delta = choice.path("delta");
-            appendDelta(delta.path("content").asText(""), listener, content);
+            String reasoningDelta = delta.path("reasoning_content").asText("");
+            if (!reasoningDelta.isEmpty()) {
+                if (reasoningStarted.compareAndSet(false, true)) {
+                    assembler.startThinking(0);
+                }
+                assembler.appendThinking(0, reasoningDelta);
+            }
+            String contentDelta = delta.path("content").asText("");
+            if (!contentDelta.isEmpty()) {
+                completeThinkingIfNeeded(assembler, reasoningStarted);
+                assembler.emitText(contentDelta);
+            }
             JsonNode toolCalls = delta.path("tool_calls");
             if (!toolCalls.isMissingNode() && !toolCalls.isNull()) {
                 if (!toolCalls.isArray()) {
                     throw new IllegalArgumentException("tool_calls 必须是数组");
                 }
+                completeThinkingIfNeeded(assembler, reasoningStarted);
                 for (JsonNode toolCall : toolCalls) {
                     JsonNode index = toolCall.get("index");
                     if (index == null || !index.canConvertToInt() || index.intValue() < 0) {
                         throw new IllegalArgumentException("工具调用缺少有效位置");
                     }
                     JsonNode function = toolCall.path("function");
-                    assembler.append(
-                            index.intValue(),
-                            textOrNull(toolCall.get("id")),
-                            textOrNull(function.get("name")),
-                            textOrNull(function.get("arguments")));
+                    int position = index.intValue();
+                    if (toolIndexes.add(position)) {
+                        assembler.startTool(
+                                position,
+                                requireText(toolCall.get("id"), "工具调用缺少 id"),
+                                requireText(function.get("name"), "工具调用缺少名称"));
+                    }
+                    String arguments = textOrNull(function.get("arguments"));
+                    if (arguments != null) {
+                        assembler.appendToolArguments(position, arguments);
+                    }
                 }
             }
             JsonNode finishReason = choice.path("finish_reason");
@@ -260,27 +322,58 @@ public final class DeepSeekClient implements LlmClient {
                 if (!"stop".equals(reason) && !"tool_calls".equals(reason)) {
                     throw new StreamAbort(protocolError("DeepSeek 响应因 " + reason + " 未正常完成", null));
                 }
+                completeThinkingIfNeeded(assembler, reasoningStarted);
+                if ("tool_calls".equals(reason)) {
+                    for (Integer index : Set.copyOf(toolIndexes)) {
+                        assembler.ensureEmptyToolArguments(index);
+                        assembler.completeTool(index);
+                        toolIndexes.remove(index);
+                    }
+                }
                 finishReasonSeen.set(true);
             }
+        } catch (LlmException exception) {
+            throw new StreamAbort(exception);
         } catch (IOException | IllegalArgumentException exception) {
             throw new StreamAbort(protocolError("DeepSeek 返回了无效的工具流事件", exception));
         }
     }
 
-    private ChatResponse completedResponse(StringBuilder content, List<ToolCall> calls) throws LlmException {
-        List<MessagePart> parts = new ArrayList<>();
-        if (!content.isEmpty()) {
-            parts.add(new TextPart(content.toString()));
+    private static void completeThinkingIfNeeded(
+            LlmStreamAssembler assembler,
+            AtomicBoolean reasoningStarted) throws LlmException {
+        if (reasoningStarted.compareAndSet(true, false)) {
+            assembler.completeThinking(0, new DeepSeekReasoningMetadata());
         }
-        calls.stream().map(ToolCallPart::new).forEach(parts::add);
-        if (parts.isEmpty()) {
-            throw protocolError("DeepSeek 完成响应但没有文本或工具调用", null);
+    }
+
+    private static void readUsage(JsonNode node, TokenUsageBuilder usage) {
+        if (node.path("prompt_tokens").canConvertToLong()) {
+            usage.input(node.path("prompt_tokens").longValue());
         }
-        return new ChatResponse(new ChatMessage(MessageRole.ASSISTANT, parts));
+        if (node.path("completion_tokens").canConvertToLong()) {
+            usage.output(node.path("completion_tokens").longValue());
+        }
+        JsonNode details = node.path("completion_tokens_details");
+        if (details.path("reasoning_tokens").canConvertToLong()) {
+            usage.reasoning(details.path("reasoning_tokens").longValue());
+        }
+        JsonNode promptDetails = node.path("prompt_tokens_details");
+        if (promptDetails.path("cached_tokens").canConvertToLong()) {
+            usage.cacheRead(promptDetails.path("cached_tokens").longValue());
+        }
     }
 
     private static String textOrNull(JsonNode node) {
         return node != null && node.isTextual() ? node.textValue() : null;
+    }
+
+    private static String requireText(JsonNode node, String message) {
+        String value = textOrNull(node);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
+        }
+        return value;
     }
 
     private String readErrorCode(InputStream body) {
@@ -290,13 +383,6 @@ public final class DeepSeekClient implements LlmClient {
             return error.path("code").asText(error.path("type").asText(""));
         } catch (IOException exception) {
             return "";
-        }
-    }
-
-    private static void appendDelta(String delta, StreamListener listener, StringBuilder content) {
-        if (delta != null && !delta.isEmpty()) {
-            content.append(delta);
-            listener.onTextDelta(delta);
         }
     }
 

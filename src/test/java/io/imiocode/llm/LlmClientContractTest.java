@@ -9,11 +9,16 @@ import io.imiocode.llm.transport.HttpErrorMapper;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
+import java.net.http.HttpHeaders;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LlmClientContractTest {
     @Test
@@ -41,6 +46,21 @@ class LlmClientContractTest {
         assertEquals(LlmErrorType.RATE_LIMIT, mapper.fromStatus(429, "").type());
         assertEquals(LlmErrorType.MODEL_NOT_FOUND, mapper.fromStatus(404, "model_not_found").type());
         assertEquals(LlmErrorType.SERVER_ERROR, mapper.fromStatus(503, "").type());
+    }
+
+    @Test
+    void onlyRateLimitCarriesRetryAfter() {
+        HttpErrorMapper mapper = new HttpErrorMapper();
+        HttpHeaders headers = HttpHeaders.of(
+                Map.of("Retry-After", List.of("15")),
+                (name, value) -> true);
+        Instant now = Instant.parse("2025-01-01T00:00:00Z");
+
+        assertEquals(
+                Duration.ofSeconds(15),
+                mapper.fromStatus(429, "", headers, now).retryAfter().orElseThrow());
+        assertTrue(mapper.fromStatus(401, "", headers, now).retryAfter().isEmpty());
+        assertTrue(mapper.fromStatus(500, "", headers, now).retryAfter().isEmpty());
     }
 
     private static AppConfig config(Provider provider) {

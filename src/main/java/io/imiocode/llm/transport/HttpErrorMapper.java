@@ -5,16 +5,33 @@ import io.imiocode.llm.LlmException;
 
 import java.io.IOException;
 import java.net.http.HttpTimeoutException;
+import java.net.http.HttpHeaders;
+import java.time.Instant;
+import java.time.Duration;
 import java.util.Locale;
 
 public final class HttpErrorMapper {
+    private final RetryAfterParser retryAfterParser = new RetryAfterParser();
+
     public LlmException fromStatus(int statusCode, String providerCode) {
+        return fromStatus(statusCode, providerCode, HttpHeaders.of(java.util.Map.of(), (a, b) -> true), Instant.now());
+    }
+
+    public LlmException fromStatus(
+            int statusCode,
+            String providerCode,
+            HttpHeaders headers,
+            Instant now) {
         String normalizedCode = providerCode == null ? "" : providerCode.toLowerCase(Locale.ROOT);
         if (statusCode == 401 || statusCode == 403) {
             return new LlmException(LlmErrorType.AUTHENTICATION, true, statusCode, "认证失败，请检查 API Key");
         }
         if (statusCode == 429) {
-            return new LlmException(LlmErrorType.RATE_LIMIT, true, statusCode, "请求受限，请稍后重试");
+            Duration retryAfter = headers.firstValue("Retry-After")
+                    .flatMap(value -> retryAfterParser.parse(value, now))
+                    .orElse(null);
+            return new LlmException(
+                    LlmErrorType.RATE_LIMIT, true, statusCode, "请求受限，请稍后重试", retryAfter, null);
         }
         if (normalizedCode.contains("model") && (normalizedCode.contains("not_found") || normalizedCode.contains("not found"))) {
             return new LlmException(LlmErrorType.MODEL_NOT_FOUND, true, statusCode, "模型不存在或当前账号无权访问");

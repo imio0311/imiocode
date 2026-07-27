@@ -2,8 +2,12 @@ package io.imiocode.conversation;
 
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
+import io.imiocode.llm.LlmEvent;
+import io.imiocode.llm.LlmEventListener;
 import io.imiocode.llm.LlmException;
 import io.imiocode.llm.StreamListener;
+import io.imiocode.llm.TokenUsage;
+import io.imiocode.llm.TokenUsageBuilder;
 import io.imiocode.llm.transport.MockLlmServer;
 import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiContext;
@@ -25,8 +29,11 @@ import java.util.List;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.OptionalLong;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -117,13 +124,18 @@ class ConversationLoopTest {
     void applicationProcessCompletesLocalToolRoundTrip() throws Exception {
         try (MockLlmServer server = new MockLlmServer();
              var readerThread = Executors.newVirtualThreadPerTaskExecutor()) {
-            server.enqueueSse("data: {\"choices\":[{\"delta\":{\"tool_calls\":["
+            server.enqueueSse("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先查看项目\","
+                    + "\"tool_calls\":["
                     + "{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\","
                     + "\"arguments\":\"{\\\"path\\\":\\\"pom.xml\\\"}\"}}]},"
-                    + "\"finish_reason\":\"tool_calls\"}]}\n\n"
+                    + "\"finish_reason\":\"tool_calls\"}],"
+                    + "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,"
+                    + "\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n\n"
                     + "data: [DONE]\n\n");
-            server.enqueueSse("data: {\"choices\":[{\"delta\":{\"content\":\"项目使用 Java 21。\"},"
-                    + "\"finish_reason\":\"stop\"}]}\n\n"
+            server.enqueueSse("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"总结结果\","
+                    + "\"content\":\"项目使用 Java 21。\"},\"finish_reason\":\"stop\"}],"
+                    + "\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":6,"
+                    + "\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n\n"
                     + "data: [DONE]\n\n");
             String java = Path.of(System.getProperty("java.home"), "bin",
                     System.getProperty("os.name").toLowerCase().contains("win") ? "java.exe" : "java")
@@ -138,6 +150,8 @@ class ConversationLoopTest {
             builder.environment().put("IMIO_MODEL", "deepseek-chat");
             builder.environment().put("DEEPSEEK_API_KEY", "local-test-key");
             builder.environment().put("DEEPSEEK_BASE_URL", server.baseUri().toString());
+            builder.environment().put("IMIO_THINKING_ENABLED", "true");
+            builder.environment().put("IMIO_REASONING_EFFORT", "medium");
             Process process = builder.start();
             try {
                 var outputFuture = readerThread.submit(
@@ -154,11 +168,19 @@ class ConversationLoopTest {
                 assertEquals(0, process.exitValue(), output);
                 assertTrue(output.contains("read_file"), output);
                 assertTrue(output.contains("LOW"), output);
+                assertTrue(output.contains("[thinking] 先查看项目"), output);
+                assertTrue(output.contains("[thinking] 总结结果"), output);
+                assertTrue(output.contains("[usage] input=10 · output=4 · reasoning=2"), output);
+                assertTrue(output.contains("[usage] input=20 · output=6 · reasoning=2"), output);
                 assertTrue(output.contains("项目使用 Java 21。"), output);
-                assertTrue(server.takeRequest().body().contains("\"tools\""));
+                String firstRequest = server.takeRequest().body();
+                assertTrue(firstRequest.contains("\"tools\""));
+                assertTrue(firstRequest.contains("\"thinking\":{\"type\":\"enabled\"}"));
+                assertTrue(firstRequest.contains("\"reasoning_effort\":\"medium\""));
                 String followUp = server.takeRequest().body();
                 assertTrue(followUp.contains("\"role\":\"tool\""));
                 assertTrue(followUp.contains("maven.compiler.release"));
+                assertTrue(followUp.contains("\"reasoning_content\":\"先查看项目\""));
             } finally {
                 if (process.isAlive()) {
                     process.destroyForcibly();
@@ -199,6 +221,77 @@ class ConversationLoopTest {
         assertEquals(1, terminal.errors.size());
         assertTrue(terminal.errors.getFirst().contains("工具已经执行"));
         assertEquals(List.of(), session.historySnapshot());
+    }
+
+    @Test
+    void routesThinkingTextAndUsageWithoutShowingMetadata() {
+        LlmClient client = new LlmClient() {
+            @Override
+            public ChatResponse streamChat(ChatRequest request, LlmEventListener listener) {
+                ThinkingPart thinking = new ThinkingPart(
+                        "分析",
+                        new OpenAiReasoningMetadata("reasoning-secret-id", "encrypted-secret"));
+                TokenUsage usage = new TokenUsageBuilder().input(8).output(3).reasoning(2).build();
+                listener.onEvent(new LlmEvent.ThinkingDelta(0, "分析"));
+                listener.onEvent(new LlmEvent.ThinkingCompleted(0, thinking));
+                listener.onEvent(new LlmEvent.TextDelta("答案"));
+                listener.onEvent(new LlmEvent.StreamCompleted(usage));
+                return new ChatResponse(
+                        new ChatMessage(
+                                MessageRole.ASSISTANT,
+                                List.of(thinking, new TextPart("答案"))),
+                        usage);
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        FakeTerminal terminal = new FakeTerminal("think", "/exit");
+
+        new ConversationLoop(new ConversationSession(client), terminal).run();
+
+        assertEquals(List.of("分析"), terminal.thinkingDeltas);
+        assertEquals(List.of("答案"), terminal.deltas);
+        assertEquals(1, terminal.usages.size());
+        assertEquals(OptionalLong.of(2), terminal.usages.getFirst().reasoningTokens());
+        assertEquals(
+                List.of("thinking-begin", "thinking:分析", "thinking-end",
+                        "answer-begin", "answer:答案", "answer-end", "usage"),
+                terminal.richActions);
+        String visible = String.join("|", terminal.richActions);
+        assertTrue(!visible.contains("reasoning-secret-id"));
+        assertTrue(!visible.contains("encrypted-secret"));
+    }
+
+    @Test
+    void displaysRetryAdviceWithoutAutomaticallyRetrying() {
+        AtomicInteger calls = new AtomicInteger();
+        LlmClient client = new LlmClient() {
+            @Override
+            public ChatResponse streamChat(ChatRequest request, StreamListener listener)
+                    throws LlmException {
+                calls.incrementAndGet();
+                throw new LlmException(
+                        LlmErrorType.RATE_LIMIT,
+                        true,
+                        429,
+                        "请求过于频繁",
+                        Duration.ofSeconds(15),
+                        null);
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        FakeTerminal terminal = new FakeTerminal("hello", "/exit");
+
+        new ConversationLoop(new ConversationSession(client), terminal).run();
+
+        assertEquals(1, calls.get());
+        assertEquals(1, terminal.errors.size());
+        assertTrue(terminal.errors.getFirst().contains("建议 15 秒后重试"));
     }
 
     private static Tool stubTool() {
@@ -251,8 +344,13 @@ class ConversationLoopTest {
         private final List<String> errors = new ArrayList<>();
         private final List<UiState> states = new ArrayList<>();
         private final List<ToolExecutionEvent> toolEvents = new ArrayList<>();
+        private final List<String> thinkingDeltas = new ArrayList<>();
+        private final List<TokenUsage> usages = new ArrayList<>();
+        private final List<String> richActions = new ArrayList<>();
         private int beginCount;
         private int endCount;
+        private boolean answerOpen;
+        private boolean thinkingOpen;
         private Runnable interruptHandler;
         private UiState state = UiState.READY;
 
@@ -283,16 +381,53 @@ class ConversationLoopTest {
         @Override
         public void beginAssistantResponse() {
             beginCount++;
+            if (!answerOpen) {
+                answerOpen = true;
+                richActions.add("answer-begin");
+            }
         }
 
         @Override
         public void appendAssistantText(String text) {
             deltas.add(text);
+            richActions.add("answer:" + text);
         }
 
         @Override
         public void endAssistantResponse() {
             endCount++;
+            if (answerOpen) {
+                answerOpen = false;
+                richActions.add("answer-end");
+            }
+        }
+
+        @Override
+        public void beginThinking() {
+            if (!thinkingOpen) {
+                thinkingOpen = true;
+                richActions.add("thinking-begin");
+            }
+        }
+
+        @Override
+        public void appendThinkingText(String text) {
+            thinkingDeltas.add(text);
+            richActions.add("thinking:" + text);
+        }
+
+        @Override
+        public void endThinking() {
+            if (thinkingOpen) {
+                thinkingOpen = false;
+                richActions.add("thinking-end");
+            }
+        }
+
+        @Override
+        public void showUsage(TokenUsage usage) {
+            usages.add(usage);
+            richActions.add("usage");
         }
 
         @Override

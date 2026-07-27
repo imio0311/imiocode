@@ -43,6 +43,62 @@ class ConfigLoaderTest {
         assertEquals(Duration.ofSeconds(3), config.connectTimeout());
         assertEquals(Duration.ofSeconds(7), config.requestTimeout());
         assertEquals(1234, config.maxOutputTokens());
+        assertFalse(config.thinking().enabled());
+    }
+
+    @Test
+    void loadsThinkingConfigurationAndEnvironmentOverrides() throws Exception {
+        writeYaml("""
+                provider: openai
+                model: gpt-5
+                max-output-tokens: 4096
+                thinking:
+                  enabled: true
+                  mode: adaptive
+                  budget-tokens: 2048
+                  effort: medium
+                  summary: concise
+                providers:
+                  openai:
+                    api-key: yaml-secret-key
+                """);
+        Map<String, String> environment = Map.of(
+                "IMIO_REASONING_EFFORT", "low",
+                "IMIO_REASONING_SUMMARY", "detailed");
+
+        AppConfig config = loader.load(tempDirectory, environment);
+
+        assertTrue(config.thinking().enabled());
+        assertEquals(ThinkingMode.ADAPTIVE, config.thinking().mode());
+        assertEquals(2048, config.thinking().budgetTokens());
+        assertEquals(ReasoningEffort.LOW, config.thinking().effort());
+        assertEquals(ReasoningSummary.DETAILED, config.thinking().summary());
+    }
+
+    @Test
+    void rejectsInvalidThinkingConfiguration() {
+        Map<String, String> invalidBoolean = baseEnvironment("openai", "OPENAI_API_KEY");
+        invalidBoolean.put("IMIO_THINKING_ENABLED", "yes");
+        assertTrue(assertThrows(
+                ConfigException.class,
+                () -> loader.load(tempDirectory, invalidBoolean)).getMessage()
+                .contains("IMIO_THINKING_ENABLED"));
+
+        Map<String, String> invalidMode = baseEnvironment("openai", "OPENAI_API_KEY");
+        invalidMode.put("IMIO_THINKING_MODE", "magic");
+        assertTrue(assertThrows(
+                ConfigException.class,
+                () -> loader.load(tempDirectory, invalidMode)).getMessage()
+                .contains("IMIO_THINKING_MODE"));
+
+        Map<String, String> invalidBudget = baseEnvironment("anthropic", "ANTHROPIC_API_KEY");
+        invalidBudget.put("IMIO_THINKING_ENABLED", "true");
+        invalidBudget.put("IMIO_THINKING_MODE", "manual");
+        invalidBudget.put("IMIO_THINKING_BUDGET_TOKENS", "512");
+        assertTrue(assertThrows(
+                ConfigException.class,
+                () -> loader.load(tempDirectory, invalidBudget)).getMessage()
+                .contains("IMIO_THINKING_BUDGET_TOKENS"));
     }
 
     @Test

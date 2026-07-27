@@ -30,7 +30,9 @@ public record ChatMessage(MessageRole role, List<MessagePart> parts) {
             Objects.requireNonNull(part, "消息部分");
             boolean valid = switch (role) {
                 case USER -> part instanceof TextPart;
-                case ASSISTANT -> part instanceof TextPart || part instanceof ToolCallPart;
+                case ASSISTANT -> part instanceof TextPart
+                        || part instanceof ThinkingPart
+                        || part instanceof ToolCallPart;
                 case TOOL -> part instanceof ToolResultPart;
             };
             if (!valid) {

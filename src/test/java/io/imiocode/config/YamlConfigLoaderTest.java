@@ -53,6 +53,28 @@ class YamlConfigLoaderTest {
     }
 
     @Test
+    void loadsThinkingDocument() throws Exception {
+        write("""
+                provider: openai
+                model: gpt-5
+                thinking:
+                  enabled: true
+                  mode: adaptive
+                  budget-tokens: 2048
+                  effort: medium
+                  summary: detailed
+                """);
+
+        ConfigDocument.ThinkingDocument thinking = loader.load(tempDirectory).thinking();
+
+        assertEquals(true, thinking.enabled());
+        assertEquals("adaptive", thinking.mode());
+        assertEquals(2048, thinking.budgetTokens());
+        assertEquals("medium", thinking.effort());
+        assertEquals("detailed", thinking.summary());
+    }
+
+    @Test
     void rejectsUnknownTopLevelFieldWithoutLeakingValue() throws Exception {
         write("""
                 provider: deepseek

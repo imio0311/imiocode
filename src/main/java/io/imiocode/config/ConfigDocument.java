@@ -13,6 +13,7 @@ record ConfigDocument(
         @JsonProperty("connect-timeout-seconds") Integer connectTimeoutSeconds,
         @JsonProperty("request-timeout-seconds") Integer requestTimeoutSeconds,
         @JsonProperty("max-output-tokens") Integer maxOutputTokens,
+        ThinkingDocument thinking,
         Map<String, ProviderConfig> providers) {
 
     ConfigDocument {
@@ -24,7 +25,7 @@ record ConfigDocument(
     }
 
     static ConfigDocument empty() {
-        return new ConfigDocument(null, null, null, null, null, Map.of());
+        return new ConfigDocument(null, null, null, null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -42,6 +43,15 @@ record ConfigDocument(
                 + ", connectTimeoutSeconds=" + connectTimeoutSeconds
                 + ", requestTimeoutSeconds=" + requestTimeoutSeconds
                 + ", maxOutputTokens=" + maxOutputTokens
+                + ", thinking=" + thinking
                 + ", providers=***]";
+    }
+
+    record ThinkingDocument(
+            Boolean enabled,
+            String mode,
+            @JsonProperty("budget-tokens") Integer budgetTokens,
+            String effort,
+            String summary) {
     }
 }

@@ -1,10 +1,17 @@
 package io.imiocode.conversation;
 
 import io.imiocode.tool.ToolExecutionEvent;
+import io.imiocode.llm.LlmEvent;
 
 @FunctionalInterface
 public interface ConversationListener {
     void onTextDelta(String text);
+
+    default void onLlmEvent(LlmEvent event) {
+        if (event instanceof LlmEvent.TextDelta delta) {
+            onTextDelta(delta.text());
+        }
+    }
 
     default void onResponseStarted() {
     }

@@ -16,6 +16,7 @@ import java.util.TreeMap;
 public final class ToolCallAssembler {
     private final ObjectMapper objectMapper;
     private final Map<Integer, Fragments> calls = new TreeMap<>();
+    private final Map<Integer, ToolCall> completed = new TreeMap<>();
 
     public ToolCallAssembler(ObjectMapper objectMapper) {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
@@ -29,6 +30,9 @@ public final class ToolCallAssembler {
         if (position < 0) {
             throw new IllegalArgumentException("工具调用位置不能为负数");
         }
+        if (completed.containsKey(position)) {
+            throw new IllegalArgumentException("工具调用已经完成");
+        }
         Fragments fragments = calls.computeIfAbsent(position, ignored -> new Fragments());
         fragments.append(fragments.id, idFragment);
         fragments.append(fragments.name, nameFragment);
@@ -36,6 +40,40 @@ public final class ToolCallAssembler {
             fragments.argumentsSeen = true;
             fragments.arguments.append(argumentsFragment);
         }
+    }
+
+    public void start(int position, String id, String name) {
+        if (position < 0 || id == null || id.isBlank() || name == null || name.isBlank()) {
+            throw new IllegalArgumentException("工具调用缺少有效位置、标识或名称");
+        }
+        if (calls.containsKey(position) || completed.containsKey(position)) {
+            throw new IllegalArgumentException("工具调用位置重复开始");
+        }
+        append(position, id, name, null);
+    }
+
+    public void appendArguments(int position, String fragment) {
+        if (!calls.containsKey(position)) {
+            throw new IllegalArgumentException("工具参数碎片没有对应调用");
+        }
+        append(position, null, null, fragment);
+    }
+
+    public ToolCall complete(int position) throws LlmException {
+        if (completed.containsKey(position)) {
+            throw protocolError("工具调用重复完成");
+        }
+        Fragments fragments = calls.remove(position);
+        if (fragments == null) {
+            throw protocolError("工具调用完成事件没有对应开始事件");
+        }
+        ToolCall call = parse(fragments);
+        completed.put(position, call);
+        return call;
+    }
+
+    public boolean hasOpenCalls() {
+        return !calls.isEmpty();
     }
 
     public void ensureEmptyArguments(int position) {
@@ -47,29 +85,32 @@ public final class ToolCallAssembler {
     }
 
     public boolean isEmpty() {
-        return calls.isEmpty();
+        return calls.isEmpty() && completed.isEmpty();
     }
 
     public List<ToolCall> finish() throws LlmException {
-        List<ToolCall> result = new ArrayList<>();
-        for (Fragments fragments : calls.values()) {
-            String id = fragments.id.toString();
-            String name = fragments.name.toString();
-            String arguments = fragments.arguments.toString();
-            if (id.isBlank() || name.isBlank() || !fragments.argumentsSeen || arguments.isBlank()) {
-                throw protocolError("工具调用缺少标识、名称或参数");
-            }
-            try {
-                JsonNode parsed = objectMapper.readTree(arguments);
-                if (!(parsed instanceof ObjectNode object)) {
-                    throw protocolError("工具调用参数必须是 JSON 对象");
-                }
-                result.add(new ToolCall(id, name, object));
-            } catch (IOException exception) {
-                throw protocolError("工具调用参数不是有效 JSON");
-            }
+        for (Integer position : new ArrayList<>(calls.keySet())) {
+            complete(position);
         }
-        return List.copyOf(result);
+        return List.copyOf(completed.values());
+    }
+
+    private ToolCall parse(Fragments fragments) throws LlmException {
+        String id = fragments.id.toString();
+        String name = fragments.name.toString();
+        String arguments = fragments.arguments.toString();
+        if (id.isBlank() || name.isBlank() || !fragments.argumentsSeen || arguments.isBlank()) {
+            throw protocolError("工具调用缺少标识、名称或参数");
+        }
+        try {
+            JsonNode parsed = objectMapper.readTree(arguments);
+            if (!(parsed instanceof ObjectNode object)) {
+                throw protocolError("工具调用参数必须是 JSON 对象");
+            }
+            return new ToolCall(id, name, object);
+        } catch (IOException exception) {
+            throw protocolError("工具调用参数不是有效 JSON");
+        }
     }
 
     private static LlmException protocolError(String message) {
