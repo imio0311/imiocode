@@ -1,5 +1,7 @@
 package io.imiocode.terminal;
 
+import io.imiocode.agent.AgentMode;
+import io.imiocode.agent.AgentStopReason;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
@@ -236,6 +238,46 @@ public final class JLineTerminalUi implements TerminalUi {
             case FAILED -> AttributedStyle.DEFAULT.foreground(AttributedStyle.RED);
         };
         printStyled(TerminalLayout.truncate(line, terminalWidth()), style, mode);
+        writer.flush();
+    }
+
+    @Override
+    public synchronized void showAgentMode(AgentMode mode) {
+        if (closed.get()) {
+            return;
+        }
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        String text = mode == AgentMode.PLAN
+                ? "[模式] Plan：仅可读取和搜索，最终输出实施计划"
+                : "[模式] Do：允许使用当前全部已启用工具";
+        printStyled(text, AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN), currentMode());
+        writer.flush();
+    }
+
+    @Override
+    public synchronized void showAgentStop(
+            AgentStopReason reason,
+            boolean sideEffectsPossible
+    ) {
+        if (closed.get()) {
+            return;
+        }
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        String reasonText = switch (reason) {
+            case MAX_ITERATIONS -> "已达到最大循环轮数";
+            case TIMEOUT -> "任务执行超时";
+            case CANCELLED -> "任务已取消";
+            case ERROR -> "执行失败";
+            case FINAL_RESPONSE -> "任务已完成";
+        };
+        String suffix = sideEffectsPossible ? "；部分操作可能已经执行" : "";
+        printStyled(
+                "[Agent] " + reasonText + suffix,
+                AttributedStyle.DEFAULT.foreground(AttributedStyle.RED),
+                currentMode()
+        );
         writer.flush();
     }
 

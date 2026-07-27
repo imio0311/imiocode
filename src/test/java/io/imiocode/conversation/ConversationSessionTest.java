@@ -113,22 +113,21 @@ class ConversationSessionTest {
     }
 
     @Test
-    void refusesSecondToolBatchAndRollsBackHistory() {
+    void continuesThroughSecondToolBatchAndCommitsWholeTrajectory() throws Exception {
         ToolCall call = call("c1", "read_file");
         SequencedClient client = new SequencedClient(List.of(
                 toolResponse(call),
-                toolResponse(call("c2", "read_file"))));
+                toolResponse(call("c2", "read_file")),
+                new ChatResponse("多步完成")));
         ToolRegistry registry = new ToolRegistry();
         registry.register(stub("read_file"));
         ConversationSession session = new ConversationSession(client, new ToolExecutor(registry));
 
-        ConversationException exception = assertThrows(
-                ConversationException.class,
-                () -> session.sendWithEvents("读取", text -> { }));
+        ChatResponse response = session.sendWithEvents("读取", text -> { });
 
-        assertTrue(exception.toolsExecuted());
-        assertTrue(exception.safeMessage().contains("只执行一批"));
-        assertEquals(List.of(), session.historySnapshot());
+        assertEquals("多步完成", response.text());
+        assertEquals(3, client.requests.size());
+        assertEquals(6, session.historySnapshot().size());
     }
 
     @Test

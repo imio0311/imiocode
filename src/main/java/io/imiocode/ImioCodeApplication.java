@@ -1,5 +1,6 @@
 package io.imiocode;
 
+import io.imiocode.agent.Agent;
 import io.imiocode.config.AppConfig;
 import io.imiocode.config.ConfigException;
 import io.imiocode.config.ConfigLoader;
@@ -12,7 +13,6 @@ import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiContext;
 import io.imiocode.terminal.VersionResolver;
 import io.imiocode.tool.SecretRedactor;
-import io.imiocode.tool.ToolExecutor;
 import io.imiocode.tool.ToolLimits;
 import io.imiocode.tool.ToolRegistry;
 import io.imiocode.tool.core.BashTool;
@@ -56,7 +56,8 @@ public final class ImioCodeApplication {
             registry.register(new GrepTool(policy, limits, redactor));
 
             client = new LlmClientFactory().create(config, registry);
-            session = new ConversationSession(client, new ToolExecutor(registry));
+            Agent agent = new Agent(client, registry, config.agent());
+            session = new ConversationSession(agent);
             terminal = new JLineTerminalUi(redactor);
             terminal.showWelcome(new UiContext(
                     "ImioCode",

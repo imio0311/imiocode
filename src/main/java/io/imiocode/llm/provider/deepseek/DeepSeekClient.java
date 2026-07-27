@@ -165,7 +165,7 @@ public final class DeepSeekClient implements LlmClient {
             appendMessage(messages, message);
         }
         ArrayNode definitions = root.putArray("tools");
-        tools.exportEnabled(this::encodeDefinition).forEach(definitions::add);
+        tools.exportEnabled(request.toolSelection(), this::encodeDefinition).forEach(definitions::add);
         try {
             return HttpRequest.newBuilder(endpoint("/chat/completions"))
                     .timeout(config.requestTimeout())
@@ -401,8 +401,7 @@ public final class DeepSeekClient implements LlmClient {
     }
 
     @Override
-    public void close() {
-        closed.set(true);
+    public void cancelActiveRequest() {
         CompletableFuture<HttpResponse<InputStream>> request = activeRequest.getAndSet(null);
         if (request != null) {
             request.cancel(true);
@@ -415,6 +414,12 @@ public final class DeepSeekClient implements LlmClient {
                 // 关闭过程无需覆盖原始退出原因。
             }
         }
+    }
+
+    @Override
+    public void close() {
+        closed.set(true);
+        cancelActiveRequest();
     }
 
     private static final class StreamAbort extends RuntimeException {

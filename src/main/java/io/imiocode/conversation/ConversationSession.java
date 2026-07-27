@@ -1,10 +1,14 @@
 package io.imiocode.conversation;
 
+import io.imiocode.agent.Agent;
+import io.imiocode.agent.AgentMode;
+import io.imiocode.agent.AgentRequest;
+import io.imiocode.agent.AgentResult;
+import io.imiocode.config.AgentConfig;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
 import io.imiocode.llm.StreamListener;
-import io.imiocode.tool.ToolExecution;
 import io.imiocode.tool.ToolExecutor;
 import io.imiocode.tool.ToolRegistry;
 
@@ -13,119 +17,75 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * 会话历史的事务边界：只有 Agent 正常完成时才提交完整临时轨迹。
+ */
 public final class ConversationSession implements AutoCloseable {
     private final List<ChatMessage> history = new ArrayList<>();
     private final List<SystemReminder> pendingReminders = new ArrayList<>();
-    private final LlmClient client;
-    private final ToolExecutor executor;
+    private final Agent agent;
     private final AtomicBoolean closed = new AtomicBoolean();
 
+    public ConversationSession(Agent agent) {
+        this.agent = Objects.requireNonNull(agent, "agent");
+    }
+
     public ConversationSession(LlmClient client) {
-        this(client, new ToolExecutor(new ToolRegistry()));
+        this(new Agent(client, new ToolRegistry(), AgentConfig.defaults()));
     }
 
     public ConversationSession(LlmClient client, ToolExecutor executor) {
-        this.client = Objects.requireNonNull(client, "client");
-        this.executor = Objects.requireNonNull(executor, "executor");
+        this(new Agent(client, executor.registry(), AgentConfig.defaults()));
     }
 
     public ChatResponse send(String userInput, StreamListener listener) throws LlmException {
         Objects.requireNonNull(listener, "listener");
         try {
-            return sendWithEvents(userInput, new ConversationListener() {
-                @Override
-                public void onTextDelta(String text) {
-                    listener.onTextDelta(text);
-                }
-            });
+            return sendWithEvents(userInput, listener::onTextDelta);
         } catch (ConversationException exception) {
-            if (exception.getCause() instanceof LlmException llmException) {
-                throw llmException;
-            }
             throw new LlmException(
                     exception.interrupted() ? LlmErrorType.INTERRUPTED : LlmErrorType.PROTOCOL,
                     exception.recoverable(),
                     null,
                     exception.safeMessage(),
-                    exception);
+                    exception.retryAfter().orElse(null),
+                    exception
+            );
         }
     }
 
     public synchronized ChatResponse sendWithEvents(
             String userInput,
-            ConversationListener listener) throws ConversationException {
+            ConversationListener listener
+    ) throws ConversationException {
         Objects.requireNonNull(listener, "listener");
         if (closed.get()) {
             throw new ConversationException("会话已关闭", false, true, false);
         }
+
         ChatMessage userMessage = new ChatMessage(MessageRole.USER, userInput);
         List<SystemReminder> reminders;
         synchronized (pendingReminders) {
             reminders = List.copyOf(pendingReminders);
             pendingReminders.clear();
         }
-        List<ChatMessage> requestMessages;
+        List<ChatMessage> committed;
         synchronized (history) {
-            requestMessages = new ArrayList<>(history);
-        }
-        requestMessages.add(userMessage);
-
-        ChatResponse first;
-        try {
-            first = request(new ChatRequest(requestMessages, reminders), listener);
-        } catch (LlmException exception) {
-            throw ConversationException.from(exception, false);
-        }
-        if (!first.hasToolCalls()) {
-            if (closed.get()) {
-                throw new ConversationException("会话已关闭", false, true, false);
-            }
-            commit(List.of(userMessage, first.message()));
-            return first;
+            committed = List.copyOf(history);
         }
 
-        List<ToolExecution> executions = executor.executeAll(first.toolCalls(), listener::onToolEvent);
-        boolean toolsExecuted = !executions.isEmpty();
-        if (executions.size() != first.toolCalls().size() || closed.get()) {
-            throw new ConversationException("工具执行已中断", false, true, toolsExecuted);
-        }
-        List<MessagePart> resultParts = executions.stream()
-                .map(execution -> new ToolResultPart(
-                        execution.call().id(),
-                        execution.call().name(),
-                        execution.result()))
-                .map(MessagePart.class::cast)
-                .toList();
-        ChatMessage toolMessage = new ChatMessage(MessageRole.TOOL, resultParts);
-        List<ChatMessage> followUp = new ArrayList<>(requestMessages);
-        followUp.add(first.message());
-        followUp.add(toolMessage);
-
-        ChatResponse finalResponse;
-        try {
-            finalResponse = request(new ChatRequest(followUp, reminders), listener);
-        } catch (LlmException exception) {
-            throw ConversationException.from(exception, true);
-        }
-        if (finalResponse.hasToolCalls()) {
-            throw new ConversationException(
-                    "本章每轮只执行一批工具，模型再次请求的工具未执行",
-                    true,
-                    false,
-                    true);
+        AgentResult result = agent.run(
+                new AgentRequest(committed, userMessage, reminders),
+                listener::onAgentEvent
+        );
+        if (!result.completed()) {
+            throw ConversationException.from(result);
         }
         if (closed.get()) {
-            throw new ConversationException("会话已关闭", false, true, true);
+            throw new ConversationException("会话已关闭", false, true, result.toolsExecuted());
         }
-        commit(List.of(userMessage, first.message(), toolMessage, finalResponse.message()));
-        return finalResponse;
-    }
-
-    private ChatResponse request(ChatRequest request, ConversationListener listener) throws LlmException {
-        listener.onResponseStarted();
-        ChatResponse response = client.streamChat(request, listener::onLlmEvent);
-        listener.onResponseCompleted();
-        return response;
+        commit(result.trajectory());
+        return result.finalResponse().orElseThrow();
     }
 
     private void commit(List<ChatMessage> messages) {
@@ -150,11 +110,23 @@ public final class ConversationSession implements AutoCloseable {
         }
     }
 
+    public AgentMode mode() {
+        return agent.mode();
+    }
+
+    public void switchMode(AgentMode mode, ConversationListener listener) {
+        Objects.requireNonNull(listener, "listener");
+        agent.switchMode(mode, listener::onAgentEvent);
+    }
+
+    public void cancelActive() {
+        agent.cancelActive();
+    }
+
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
-            executor.close();
-            client.close();
+            agent.close();
         }
     }
 }

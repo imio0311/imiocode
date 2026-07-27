@@ -14,6 +14,7 @@ record ConfigDocument(
         @JsonProperty("request-timeout-seconds") Integer requestTimeoutSeconds,
         @JsonProperty("max-output-tokens") Integer maxOutputTokens,
         ThinkingDocument thinking,
+        AgentDocument agent,
         Map<String, ProviderConfig> providers) {
 
     ConfigDocument {
@@ -25,7 +26,7 @@ record ConfigDocument(
     }
 
     static ConfigDocument empty() {
-        return new ConfigDocument(null, null, null, null, null, null, Map.of());
+        return new ConfigDocument(null, null, null, null, null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -44,6 +45,7 @@ record ConfigDocument(
                 + ", requestTimeoutSeconds=" + requestTimeoutSeconds
                 + ", maxOutputTokens=" + maxOutputTokens
                 + ", thinking=" + thinking
+                + ", agent=" + agent
                 + ", providers=***]";
     }
 
@@ -53,5 +55,11 @@ record ConfigDocument(
             @JsonProperty("budget-tokens") Integer budgetTokens,
             String effort,
             String summary) {
+    }
+
+    record AgentDocument(
+            @JsonProperty("max-iterations") Integer maxIterations,
+            @JsonProperty("timeout-seconds") Integer timeoutSeconds,
+            @JsonProperty("max-parallel-tools") Integer maxParallelTools) {
     }
 }

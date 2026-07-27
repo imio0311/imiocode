@@ -42,6 +42,18 @@ public final class ToolRegistry {
         return Optional.ofNullable(tools.get(name));
     }
 
+    public synchronized Optional<Tool> findEnabled(String name, ToolSelection selection) {
+        Objects.requireNonNull(selection, "selection");
+        if (!selection.allows(name)) {
+            return Optional.empty();
+        }
+        return findEnabled(name);
+    }
+
+    public synchronized Set<String> enabledNames() {
+        return Set.copyOf(enabled);
+    }
+
     public synchronized List<ToolDefinition> enabledDefinitions() {
         return tools.entrySet().stream()
                 .filter(entry -> enabled.contains(entry.getKey()))
@@ -51,10 +63,19 @@ public final class ToolRegistry {
     }
 
     public <T> List<T> exportEnabled(ToolDefinitionEncoder<T> encoder) {
+        return exportEnabled(ToolSelection.allEnabled(), encoder);
+    }
+
+    public <T> List<T> exportEnabled(
+            ToolSelection selection,
+            ToolDefinitionEncoder<T> encoder) {
+        Objects.requireNonNull(selection, "selection");
         Objects.requireNonNull(encoder, "encoder");
         List<T> encoded = new ArrayList<>();
         for (ToolDefinition definition : enabledDefinitions()) {
-            encoded.add(Objects.requireNonNull(encoder.encode(definition), "编码结果"));
+            if (selection.allows(definition.name())) {
+                encoded.add(Objects.requireNonNull(encoder.encode(definition), "编码结果"));
+            }
         }
         return List.copyOf(encoded);
     }

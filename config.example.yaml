@@ -11,6 +11,11 @@ thinking:
   effort: high
   summary: auto
 
+agent:
+  max-iterations: 20
+  timeout-seconds: 600
+  max-parallel-tools: 4
+
 providers:
   openai:
     api-key: ""

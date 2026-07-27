@@ -1,5 +1,7 @@
 package io.imiocode.conversation;
 
+import io.imiocode.agent.AgentMode;
+import io.imiocode.agent.PlanModePrompt;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmEvent;
@@ -294,6 +296,23 @@ class ConversationLoopTest {
         assertTrue(terminal.errors.getFirst().contains("建议 15 秒后重试"));
     }
 
+    @Test
+    void planAndDoCommandsSwitchToolsWithoutModelRequests() {
+        FakeClient client = new FakeClient();
+        FakeTerminal terminal = new FakeTerminal(
+                "/plan", "先规划", "/do", "再执行", "/exit");
+
+        new ConversationLoop(new ConversationSession(client), terminal).run();
+
+        assertEquals(2, client.calls);
+        assertEquals(List.of(AgentMode.PLAN, AgentMode.DO), terminal.agentModes);
+        assertEquals(PlanModePrompt.READ_ONLY_TOOLS,
+                client.requests.getFirst().toolSelection().allowedNames());
+        assertTrue(client.requests.get(1).toolSelection().unrestricted());
+        assertTrue(client.requests.getFirst().reminders().stream()
+                .anyMatch(reminder -> reminder.content().contains("Plan Mode")));
+    }
+
     private static Tool stubTool() {
         return new Tool() {
             @Override
@@ -347,6 +366,7 @@ class ConversationLoopTest {
         private final List<String> thinkingDeltas = new ArrayList<>();
         private final List<TokenUsage> usages = new ArrayList<>();
         private final List<String> richActions = new ArrayList<>();
+        private final List<AgentMode> agentModes = new ArrayList<>();
         private int beginCount;
         private int endCount;
         private boolean answerOpen;
@@ -433,6 +453,11 @@ class ConversationLoopTest {
         @Override
         public void showToolEvent(ToolExecutionEvent event) {
             toolEvents.add(event);
+        }
+
+        @Override
+        public void showAgentMode(AgentMode mode) {
+            agentModes.add(mode);
         }
 
         @Override

@@ -263,13 +263,16 @@
 
 | 项目 | 结果 | 证据 |
 |---|---|---|
-| 自动化测试 | 待执行 | 记录测试数量、失败、错误和跳过 |
-| Agent 多轮循环 | 待执行 | 记录 AgentTest 与请求次数 |
-| 安全并发与屏障 | 待执行 | 记录最大并发和时间区间 |
-| 五种停止条件 | 待执行 | 记录终态事件统计 |
-| Plan Mode | 待执行 | 记录工具选择和模式输出 |
-| 历史事务 | 待执行 | 记录成功与失败 historySnapshot |
-| 三家 Provider | 待执行 | 记录过滤、取消和协议回归 |
-| 真实 Java 进程 | 待执行 | 记录输出、文件和退出码 |
-| 安全扫描 | 待执行 | 记录匹配数量 |
-| tmux | 待执行 | 保存 capture 或环境阻塞 |
+| 自动化测试 | 通过 | `mvn -q clean package`：143 tests，0 failures，0 errors，1 skipped；40 个测试套件 |
+| Agent 多轮循环 | 通过 | `AgentTest` 5/5；覆盖单轮、多轮工具回传、末轮停止和监听器异常 |
+| 安全并发与屏障 | 通过 | `ToolBatchExecutorTest` 2/2；验证安全工具真实并发、并发上限、原顺序结果和禁止工具不执行 |
+| 五种停止条件 | 通过 | `AgentTest` + `AgentCancellationTest` 7/7；覆盖 FINAL、MAX、ERROR、TIMEOUT、CANCELLED |
+| Plan Mode | 通过 | Agent 与终端测试验证只导出 ReadFile/Glob/Grep、附加固定提醒、`/plan`/`/do` 不请求模型 |
+| 历史事务 | 通过 | `ConversationSessionTest` 8/8；成功提交完整多轮轨迹，停止和失败不提交 |
+| 三家 Provider | 通过 | Anthropic 5/5、OpenAI 6/6、DeepSeek 5/5；工具过滤和交错工具顺序回归通过 |
+| 真实 Java 进程 | 部分通过 | shaded JAR 真实启动并输入 `/exit`，显示 Ready 且退出码 0；未执行真实联网模型任务 |
+| 安全扫描 | 通过 | 扫描生产源码、测试报告和 shaded JAR 等 227 个文件，本地配置 Key 匹配文件数为 0 |
+| tmux | 环境阻塞 | Windows 未安装 tmux；WSL 存在但创建实例返回 `E_ACCESSDENIED`，无法取得 capture-pane |
+
+> 2026-07-27 验收说明：tmux 阻塞属于本机环境限制。自动化 Agent、多轮工具、Plan Mode、
+> 超时/取消与真实 JAR 启动均已执行；没有把未运行的 tmux 场景标记为通过。

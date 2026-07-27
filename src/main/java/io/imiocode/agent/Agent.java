@@ -1,0 +1,294 @@
+package io.imiocode.agent;
+
+import io.imiocode.config.AgentConfig;
+import io.imiocode.conversation.ChatMessage;
+import io.imiocode.conversation.ChatRequest;
+import io.imiocode.conversation.ChatResponse;
+import io.imiocode.conversation.MessagePart;
+import io.imiocode.conversation.MessageRole;
+import io.imiocode.conversation.SystemReminder;
+import io.imiocode.conversation.ToolResultPart;
+import io.imiocode.llm.LlmClient;
+import io.imiocode.llm.LlmException;
+import io.imiocode.tool.ToolExecution;
+import io.imiocode.tool.ToolRegistry;
+import io.imiocode.tool.ToolSelection;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * 驱动模型思考、工具执行和结果回传的 ReAct Agent。
+ */
+public final class Agent implements AutoCloseable {
+    private final LlmClient client;
+    private final ToolRegistry registry;
+    private final AgentConfig config;
+    private final StreamingResponseCollector collector;
+    private final AtomicReference<AgentMode> mode = new AtomicReference<>(AgentMode.DO);
+    private final AtomicReference<AgentTaskContext> activeTask = new AtomicReference<>();
+    private final ScheduledExecutorService watchdog =
+            Executors.newSingleThreadScheduledExecutor(
+                    Thread.ofVirtual().name("imio-agent-watchdog-", 0).factory());
+    private final AtomicBoolean closed = new AtomicBoolean();
+
+    public Agent(LlmClient client, ToolRegistry registry, AgentConfig config) {
+        this.client = Objects.requireNonNull(client, "client 不能为空");
+        this.registry = Objects.requireNonNull(registry, "registry 不能为空");
+        this.config = Objects.requireNonNull(config, "config 不能为空");
+        this.collector = new StreamingResponseCollector(client);
+    }
+
+    public AgentMode mode() {
+        return mode.get();
+    }
+
+    public void switchMode(AgentMode nextMode, AgentEventListener listener) {
+        Objects.requireNonNull(nextMode, "nextMode 不能为空");
+        AgentEventListener checkedListener =
+                Objects.requireNonNullElse(listener, AgentEventListener.NOOP);
+        ensureOpen();
+        AgentMode previous = mode.getAndSet(nextMode);
+        if (previous != nextMode) {
+            checkedListener.onEvent(new AgentEvent.ModeChanged(previous, nextMode));
+        }
+    }
+
+    public AgentResult run(AgentRequest request, AgentEventListener listener) {
+        Objects.requireNonNull(request, "request 不能为空");
+        AgentEventListener checkedListener =
+                Objects.requireNonNullElse(listener, AgentEventListener.NOOP);
+        ensureOpen();
+
+        AgentTaskContext context = new AgentTaskContext(config.taskTimeout());
+        if (!activeTask.compareAndSet(null, context)) {
+            throw new IllegalStateException("同一时间只能运行一个 Agent 任务");
+        }
+
+        AgentMode taskMode = mode.get();
+        ToolSelection selection = PlanModePrompt.toolSelection(taskMode);
+        List<SystemReminder> reminders = combineReminders(request.reminders(), taskMode);
+        List<ChatMessage> trajectory = new ArrayList<>();
+        trajectory.add(request.userMessage());
+        int iterations = 0;
+        ScheduledFuture<?> timeoutFuture = watchdog.schedule(
+                () -> context.requestStop(AgentStopReason.TIMEOUT, client),
+                config.taskTimeout().toNanos(),
+                TimeUnit.NANOSECONDS
+        );
+
+        try (ToolBatchExecutor batchExecutor = new ToolBatchExecutor(
+                registry,
+                config.maxParallelTools(),
+                context::markSideEffectsPossible
+        )) {
+            context.attachToolExecutor(batchExecutor);
+            checkedListener.onEvent(new AgentEvent.TaskStarted(taskMode));
+
+            for (int iteration = 1; iteration <= config.maxIterations(); iteration++) {
+                iterations = iteration;
+                Optional<AgentStopReason> beforeIteration = context.stopReason();
+                if (beforeIteration.isPresent()) {
+                    return stopped(context, trajectory, iterations - 1,
+                            beforeIteration.get(), checkedListener);
+                }
+                if (context.deadlineReached()) {
+                    context.requestStop(AgentStopReason.TIMEOUT, client);
+                    return stopped(context, trajectory, iterations - 1,
+                            AgentStopReason.TIMEOUT, checkedListener);
+                }
+
+                checkedListener.onEvent(new AgentEvent.IterationStarted(iteration));
+                ChatResponse response = collector.collect(
+                        new ChatRequest(
+                                requestMessages(request.committedHistory(), trajectory),
+                                reminders,
+                                selection
+                        ),
+                        iteration,
+                        checkedListener
+                );
+                trajectory.add(response.message());
+
+                Optional<AgentStopReason> afterModel = context.stopReason();
+                if (afterModel.isPresent()) {
+                    return stopped(context, trajectory, iteration,
+                            afterModel.get(), checkedListener);
+                }
+
+                if (!response.hasToolCalls()) {
+                    if (context.tryFinish(AgentStopReason.FINAL_RESPONSE)) {
+                        emitSafely(
+                                checkedListener,
+                                new AgentEvent.TaskCompleted(iteration)
+                        );
+                        return AgentResult.completed(
+                                trajectory,
+                                response,
+                                context.toolsExecuted(),
+                                context.sideEffectsPossible()
+                        );
+                    }
+                    return stopped(context, trajectory, iteration,
+                            context.stopReason().orElse(AgentStopReason.CANCELLED),
+                            checkedListener);
+                }
+
+                if (iteration == config.maxIterations()) {
+                    context.tryFinish(AgentStopReason.MAX_ITERATIONS);
+                    return stopped(context, trajectory, iteration,
+                            AgentStopReason.MAX_ITERATIONS, checkedListener);
+                }
+
+                List<ToolExecution> executions = batchExecutor.execute(
+                        response.toolCalls(),
+                        selection,
+                        iteration,
+                        checkedListener
+                );
+                if (!executions.isEmpty()) {
+                    context.markToolsExecuted();
+                }
+
+                Optional<AgentStopReason> afterTools = context.stopReason();
+                if (afterTools.isPresent()) {
+                    return stopped(context, trajectory, iteration,
+                            afterTools.get(), checkedListener);
+                }
+                trajectory.add(toToolMessage(executions));
+            }
+
+            context.tryFinish(AgentStopReason.MAX_ITERATIONS);
+            return stopped(context, trajectory, iterations,
+                    AgentStopReason.MAX_ITERATIONS, checkedListener);
+        } catch (LlmException exception) {
+            Optional<AgentStopReason> existing = context.stopReason();
+            if (existing.isPresent() && existing.get() != AgentStopReason.ERROR) {
+                return stopped(context, trajectory, iterations, existing.get(), checkedListener);
+            }
+            AgentError error = new AgentError(
+                    exception.safeMessage(),
+                    exception.recoverable(),
+                    exception.retryAfter()
+            );
+            context.tryFinish(AgentStopReason.ERROR);
+            return failed(context, trajectory, iterations, error, checkedListener);
+        } catch (RuntimeException exception) {
+            Optional<AgentStopReason> existing = context.stopReason();
+            if (existing.isPresent() && existing.get() != AgentStopReason.ERROR) {
+                return stopped(context, trajectory, iterations, existing.get(), checkedListener);
+            }
+            AgentError error = new AgentError("Agent 执行失败", false);
+            context.tryFinish(AgentStopReason.ERROR);
+            return failed(context, trajectory, iterations, error, checkedListener);
+        } finally {
+            timeoutFuture.cancel(false);
+            activeTask.compareAndSet(context, null);
+        }
+    }
+
+    private static List<SystemReminder> combineReminders(
+            List<SystemReminder> requestReminders,
+            AgentMode mode
+    ) {
+        List<SystemReminder> combined = new ArrayList<>(requestReminders);
+        combined.addAll(PlanModePrompt.additionalReminders(mode));
+        return List.copyOf(combined);
+    }
+
+    private static List<ChatMessage> requestMessages(
+            List<ChatMessage> committed,
+            List<ChatMessage> trajectory
+    ) {
+        List<ChatMessage> messages = new ArrayList<>(committed);
+        messages.addAll(trajectory);
+        return List.copyOf(messages);
+    }
+
+    private static ChatMessage toToolMessage(List<ToolExecution> executions) {
+        if (executions.isEmpty()) {
+            throw new IllegalStateException("工具调用未产生结果");
+        }
+        List<MessagePart> parts = executions.stream()
+                .map(execution -> new ToolResultPart(
+                        execution.call().id(),
+                        execution.call().name(),
+                        execution.result()
+                ))
+                .map(MessagePart.class::cast)
+                .toList();
+        return new ChatMessage(MessageRole.TOOL, parts);
+    }
+
+    private static AgentResult stopped(
+            AgentTaskContext context,
+            List<ChatMessage> trajectory,
+            int iterations,
+            AgentStopReason reason,
+            AgentEventListener listener
+    ) {
+        emitSafely(listener, new AgentEvent.TaskStopped(
+                reason, Math.max(iterations, 0), context.sideEffectsPossible()));
+        return AgentResult.stopped(
+                reason,
+                trajectory,
+                context.toolsExecuted(),
+                context.sideEffectsPossible()
+        );
+    }
+
+    private static AgentResult failed(
+            AgentTaskContext context,
+            List<ChatMessage> trajectory,
+            int iterations,
+            AgentError error,
+            AgentEventListener listener
+    ) {
+        emitSafely(listener, new AgentEvent.TaskFailed(
+                Math.max(iterations, 0), error, context.sideEffectsPossible()));
+        return AgentResult.failed(
+                trajectory,
+                context.toolsExecuted(),
+                context.sideEffectsPossible(),
+                error
+        );
+    }
+
+    public void cancelActive() {
+        AgentTaskContext context = activeTask.get();
+        if (context != null) {
+            context.requestStop(AgentStopReason.CANCELLED, client);
+        }
+    }
+
+    private static void emitSafely(AgentEventListener listener, AgentEvent event) {
+        try {
+            listener.onEvent(event);
+        } catch (RuntimeException ignored) {
+            // 终态已经确定，UI 异常不能改变结果或触发第二个终态。
+        }
+    }
+
+    private void ensureOpen() {
+        if (closed.get()) {
+            throw new IllegalStateException("Agent 已关闭");
+        }
+    }
+
+    @Override
+    public void close() {
+        if (closed.compareAndSet(false, true)) {
+            cancelActive();
+            watchdog.shutdownNow();
+            client.close();
+        }
+    }
+}

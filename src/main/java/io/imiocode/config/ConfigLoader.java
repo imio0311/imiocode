@@ -87,10 +87,28 @@ public final class ConfigLoader {
         }
         ThinkingConfig thinking = new ThinkingConfig(
                 thinkingEnabled, thinkingMode, thinkingBudget, reasoningEffort, reasoningSummary);
+        ConfigDocument.AgentDocument agentDocument = document.agent();
+        int maxIterations = mergePositiveInt(
+                environment.get("IMIO_AGENT_MAX_ITERATIONS"),
+                agentDocument == null ? null : agentDocument.maxIterations(),
+                AgentConfig.DEFAULT_MAX_ITERATIONS,
+                "IMIO_AGENT_MAX_ITERATIONS");
+        Duration taskTimeout = Duration.ofSeconds(mergePositiveInt(
+                environment.get("IMIO_AGENT_TIMEOUT_SECONDS"),
+                agentDocument == null ? null : agentDocument.timeoutSeconds(),
+                Math.toIntExact(AgentConfig.DEFAULT_TASK_TIMEOUT.toSeconds()),
+                "IMIO_AGENT_TIMEOUT_SECONDS"));
+        int maxParallelTools = mergePositiveInt(
+                environment.get("IMIO_AGENT_MAX_PARALLEL_TOOLS"),
+                agentDocument == null ? null : agentDocument.maxParallelTools(),
+                AgentConfig.DEFAULT_MAX_PARALLEL_TOOLS,
+                "IMIO_AGENT_MAX_PARALLEL_TOOLS");
+        AgentConfig agent = new AgentConfig(maxIterations, taskTimeout, maxParallelTools);
 
         try {
             return new AppConfig(
-                    provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens, thinking);
+                    provider, model, apiKey, baseUri, connectTimeout, requestTimeout,
+                    maxOutputTokens, thinking, agent);
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("配置无效：" + exception.getMessage(), exception);
         }
@@ -167,6 +185,9 @@ public final class ConfigLoader {
             case "IMIO_REQUEST_TIMEOUT_SECONDS" -> "request-timeout-seconds";
             case "IMIO_MAX_OUTPUT_TOKENS" -> "max-output-tokens";
             case "IMIO_THINKING_BUDGET_TOKENS" -> "thinking.budget-tokens";
+            case "IMIO_AGENT_MAX_ITERATIONS" -> "agent.max-iterations";
+            case "IMIO_AGENT_TIMEOUT_SECONDS" -> "agent.timeout-seconds";
+            case "IMIO_AGENT_MAX_PARALLEL_TOOLS" -> "agent.max-parallel-tools";
             default -> environmentName;
         };
     }

@@ -12,7 +12,8 @@ public record AppConfig(
         Duration connectTimeout,
         Duration requestTimeout,
         int maxOutputTokens,
-        ThinkingConfig thinking) {
+        ThinkingConfig thinking,
+        AgentConfig agent) {
 
     public AppConfig {
         Objects.requireNonNull(provider, "provider");
@@ -22,6 +23,7 @@ public record AppConfig(
         Objects.requireNonNull(connectTimeout, "connectTimeout");
         Objects.requireNonNull(requestTimeout, "requestTimeout");
         Objects.requireNonNull(thinking, "thinking");
+        Objects.requireNonNull(agent, "agent");
         if (!baseUri.isAbsolute()) {
             throw new IllegalArgumentException("baseUri 必须是绝对 URI");
         }
@@ -43,9 +45,22 @@ public record AppConfig(
             URI baseUri,
             Duration connectTimeout,
             Duration requestTimeout,
+            int maxOutputTokens,
+            ThinkingConfig thinking) {
+        this(provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens,
+                thinking, AgentConfig.defaults());
+    }
+
+    public AppConfig(
+            Provider provider,
+            String model,
+            String apiKey,
+            URI baseUri,
+            Duration connectTimeout,
+            Duration requestTimeout,
             int maxOutputTokens) {
         this(provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens,
-                ThinkingConfig.disabled());
+                ThinkingConfig.disabled(), AgentConfig.defaults());
     }
 
     private static String requireText(String value, String name) {
@@ -64,6 +79,7 @@ public record AppConfig(
                 + ", connectTimeout=" + connectTimeout
                 + ", requestTimeout=" + requestTimeout
                 + ", maxOutputTokens=" + maxOutputTokens
-                + ", thinking=" + thinking + "]";
+                + ", thinking=" + thinking
+                + ", agent=" + agent + "]";
     }
 }

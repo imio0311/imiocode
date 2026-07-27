@@ -22,6 +22,7 @@ public final class LlmStreamAssembler {
     private final LlmEventListener listener;
     private final ToolCallAssembler tools;
     private final List<MessagePart> parts = new ArrayList<>();
+    private final Map<String, Integer> toolIndexes = new HashMap<>();
     private final StringBuilder text = new StringBuilder();
     private final Map<Integer, StringBuilder> thinking = new HashMap<>();
     private boolean completed;
@@ -105,7 +106,18 @@ public final class LlmStreamAssembler {
     public void completeTool(int index) throws LlmException {
         ensureActive();
         ToolCall call = tools.complete(index);
-        parts.add(new ToolCallPart(call));
+        ToolCallPart part = new ToolCallPart(call);
+        int insertionPoint = parts.size();
+        for (int position = 0; position < parts.size(); position++) {
+            MessagePart existing = parts.get(position);
+            if (existing instanceof ToolCallPart existingTool
+                    && toolIndexes.getOrDefault(existingTool.call().id(), Integer.MAX_VALUE) > index) {
+                insertionPoint = position;
+                break;
+            }
+        }
+        parts.add(insertionPoint, part);
+        toolIndexes.put(call.id(), index);
         listener.onEvent(new LlmEvent.ToolCallCompleted(index, call));
     }
 
