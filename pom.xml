@@ -54,6 +54,8 @@
                 <version>3.5.2</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
+                    <!-- 中文 Windows 路径下避免 Manifest-JAR 的绝对 classpath 校验失败。 -->
+                    <useManifestOnlyJar>false</useManifestOnlyJar>
                 </configuration>
             </plugin>
             <plugin>

@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -32,7 +33,8 @@ public final class Agent implements AutoCloseable {
     private final LlmClient client;
     private final ToolRegistry registry;
     private final AgentConfig config;
-    private final StreamingResponseCollector collector;
+    private final StreamingTurnExecutor turnExecutor;
+    private final int initialOutputTokenLimit;
     private final AtomicReference<AgentMode> mode = new AtomicReference<>(AgentMode.DO);
     private final AtomicReference<AgentTaskContext> activeTask = new AtomicReference<>();
     private final ScheduledExecutorService watchdog =
@@ -41,10 +43,24 @@ public final class Agent implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public Agent(LlmClient client, ToolRegistry registry, AgentConfig config) {
+        this(client, registry, config, 8_192);
+    }
+
+    public Agent(
+            LlmClient client,
+            ToolRegistry registry,
+            AgentConfig config,
+            int initialOutputTokenLimit
+    ) {
         this.client = Objects.requireNonNull(client, "client 不能为空");
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
         this.config = Objects.requireNonNull(config, "config 不能为空");
-        this.collector = new StreamingResponseCollector(client);
+        if (initialOutputTokenLimit <= 0) {
+            throw new IllegalArgumentException("initialOutputTokenLimit 必须为正数");
+        }
+        this.initialOutputTokenLimit = initialOutputTokenLimit;
+        this.turnExecutor = new StreamingTurnExecutor(
+                client, registry, config.maxParallelTools());
     }
 
     public AgentMode mode() {
@@ -79,18 +95,14 @@ public final class Agent implements AutoCloseable {
         List<ChatMessage> trajectory = new ArrayList<>();
         trajectory.add(request.userMessage());
         int iterations = 0;
+        UnknownToolCircuitBreaker unknownTools = new UnknownToolCircuitBreaker();
         ScheduledFuture<?> timeoutFuture = watchdog.schedule(
                 () -> context.requestStop(AgentStopReason.TIMEOUT, client),
                 config.taskTimeout().toNanos(),
                 TimeUnit.NANOSECONDS
         );
 
-        try (ToolBatchExecutor batchExecutor = new ToolBatchExecutor(
-                registry,
-                config.maxParallelTools(),
-                context::markSideEffectsPossible
-        )) {
-            context.attachToolExecutor(batchExecutor);
+        try {
             checkedListener.onEvent(new AgentEvent.TaskStarted(taskMode));
 
             for (int iteration = 1; iteration <= config.maxIterations(); iteration++) {
@@ -107,15 +119,20 @@ public final class Agent implements AutoCloseable {
                 }
 
                 checkedListener.onEvent(new AgentEvent.IterationStarted(iteration));
-                ChatResponse response = collector.collect(
+                StreamingTurnResult turn = turnExecutor.execute(
                         new ChatRequest(
                                 requestMessages(request.committedHistory(), trajectory),
                                 reminders,
-                                selection
+                                selection,
+                                OptionalInt.of(initialOutputTokenLimit)
                         ),
                         iteration,
+                        iteration < config.maxIterations(),
+                        context,
+                        unknownTools,
                         checkedListener
                 );
+                ChatResponse response = turn.response();
                 trajectory.add(response.message());
 
                 Optional<AgentStopReason> afterModel = context.stopReason();
@@ -148,13 +165,8 @@ public final class Agent implements AutoCloseable {
                             AgentStopReason.MAX_ITERATIONS, checkedListener);
                 }
 
-                List<ToolExecution> executions = batchExecutor.execute(
-                        response.toolCalls(),
-                        selection,
-                        iteration,
-                        checkedListener
-                );
-                if (!executions.isEmpty()) {
+                List<ToolExecution> executions = turn.toolExecutions();
+                if (turn.toolsStarted()) {
                     context.markToolsExecuted();
                 }
 
@@ -169,6 +181,18 @@ public final class Agent implements AutoCloseable {
             context.tryFinish(AgentStopReason.MAX_ITERATIONS);
             return stopped(context, trajectory, iterations,
                     AgentStopReason.MAX_ITERATIONS, checkedListener);
+        } catch (UnknownToolCircuitOpenException exception) {
+            if (!context.tryFinish(AgentStopReason.TOO_MANY_UNKNOWN_TOOLS)) {
+                AgentStopReason existing = context.stopReason()
+                        .orElse(AgentStopReason.TOO_MANY_UNKNOWN_TOOLS);
+                return stopped(context, trajectory, iterations, existing, checkedListener);
+            }
+            return stopped(
+                    context,
+                    trajectory,
+                    iterations,
+                    AgentStopReason.TOO_MANY_UNKNOWN_TOOLS,
+                    checkedListener);
         } catch (LlmException exception) {
             Optional<AgentStopReason> existing = context.stopReason();
             if (existing.isPresent() && existing.get() != AgentStopReason.ERROR) {

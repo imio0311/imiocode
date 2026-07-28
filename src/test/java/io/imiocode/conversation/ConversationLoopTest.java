@@ -1,6 +1,7 @@
 package io.imiocode.conversation;
 
 import io.imiocode.agent.AgentMode;
+import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.PlanModePrompt;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
@@ -68,13 +69,15 @@ class ConversationLoopTest {
 
         new ConversationLoop(new ConversationSession(client), terminal).run();
 
-        assertEquals(2, client.calls);
-        assertEquals(1, terminal.errors.size());
-        assertTrue(terminal.errors.get(0).contains("本轮响应未完成"));
+        assertEquals(3, client.calls);
+        assertEquals(0, terminal.errors.size());
+        assertEquals(1, terminal.retries.size());
         assertEquals(List.of(
                 UiState.THINKING,
                 UiState.STREAMING,
-                UiState.ERROR,
+                UiState.THINKING,
+                UiState.STREAMING,
+                UiState.READY,
                 UiState.THINKING,
                 UiState.STREAMING,
                 UiState.READY), terminal.states);
@@ -267,7 +270,7 @@ class ConversationLoopTest {
     }
 
     @Test
-    void displaysRetryAdviceWithoutAutomaticallyRetrying() {
+    void automaticallyRetriesRateLimitAndDisplaysRetries() {
         AtomicInteger calls = new AtomicInteger();
         LlmClient client = new LlmClient() {
             @Override
@@ -279,7 +282,7 @@ class ConversationLoopTest {
                         true,
                         429,
                         "请求过于频繁",
-                        Duration.ofSeconds(15),
+                        Duration.ZERO,
                         null);
             }
 
@@ -291,9 +294,10 @@ class ConversationLoopTest {
 
         new ConversationLoop(new ConversationSession(client), terminal).run();
 
-        assertEquals(1, calls.get());
+        assertEquals(4, calls.get());
+        assertEquals(3, terminal.retries.size());
         assertEquals(1, terminal.errors.size());
-        assertTrue(terminal.errors.getFirst().contains("建议 15 秒后重试"));
+        assertTrue(terminal.errors.getFirst().contains("本轮响应未完成"));
     }
 
     @Test
@@ -367,6 +371,7 @@ class ConversationLoopTest {
         private final List<TokenUsage> usages = new ArrayList<>();
         private final List<String> richActions = new ArrayList<>();
         private final List<AgentMode> agentModes = new ArrayList<>();
+        private final List<AgentEvent.RetryScheduled> retries = new ArrayList<>();
         private int beginCount;
         private int endCount;
         private boolean answerOpen;
@@ -458,6 +463,11 @@ class ConversationLoopTest {
         @Override
         public void showAgentMode(AgentMode mode) {
             agentModes.add(mode);
+        }
+
+        @Override
+        public void showRetry(AgentEvent.RetryScheduled retry) {
+            retries.add(retry);
         }
 
         @Override

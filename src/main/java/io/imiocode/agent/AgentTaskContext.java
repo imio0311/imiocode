@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicReference;
 final class AgentTaskContext {
     private final long deadlineNanos;
     private final AtomicReference<AgentStopReason> stopReason = new AtomicReference<>();
-    private final AtomicReference<ToolBatchExecutor> toolExecutor = new AtomicReference<>();
+    private final AtomicReference<Runnable> activeCancellation = new AtomicReference<>();
     private final AtomicBoolean toolsExecuted = new AtomicBoolean();
     private final AtomicBoolean sideEffectsPossible = new AtomicBoolean();
 
@@ -25,6 +25,10 @@ final class AgentTaskContext {
 
     boolean deadlineReached() {
         return System.nanoTime() - deadlineNanos >= 0;
+    }
+
+    Duration remainingTime() {
+        return Duration.ofNanos(Math.max(0, deadlineNanos - System.nanoTime()));
     }
 
     boolean tryFinish(AgentStopReason reason) {
@@ -39,9 +43,9 @@ final class AgentTaskContext {
             return false;
         }
         Objects.requireNonNull(client, "client 不能为空").cancelActiveRequest();
-        ToolBatchExecutor executor = toolExecutor.get();
-        if (executor != null) {
-            executor.cancel();
+        Runnable cancellation = activeCancellation.get();
+        if (cancellation != null) {
+            cancellation.run();
         }
         return true;
     }
@@ -51,10 +55,18 @@ final class AgentTaskContext {
     }
 
     void attachToolExecutor(ToolBatchExecutor executor) {
-        toolExecutor.set(Objects.requireNonNull(executor, "executor 不能为空"));
+        attachCancellation(Objects.requireNonNull(executor, "executor 不能为空")::cancel);
+    }
+
+    void attachCancellation(Runnable cancellation) {
+        activeCancellation.set(Objects.requireNonNull(cancellation, "cancellation 不能为空"));
         if (stopReason.get() != null) {
-            executor.cancel();
+            cancellation.run();
         }
+    }
+
+    void clearCancellation(Runnable cancellation) {
+        activeCancellation.compareAndSet(cancellation, null);
     }
 
     void markToolsExecuted() {

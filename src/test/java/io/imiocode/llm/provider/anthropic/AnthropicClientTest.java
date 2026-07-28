@@ -26,6 +26,7 @@ import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalInt;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -66,6 +67,27 @@ class AnthropicClientTest {
                     () -> client(server).streamChat(request(), text -> { }));
 
             assertEquals(LlmErrorType.PROTOCOL, exception.type());
+        }
+    }
+
+    @Test
+    void mapsOutputLimitAndUsesRequestOverride() throws Exception {
+        try (MockLlmServer server = new MockLlmServer()) {
+            server.enqueueSse("event: message_delta\n"
+                    + "data: {\"type\":\"message_delta\",\"delta\":"
+                    + "{\"stop_reason\":\"max_tokens\"},\"usage\":{}}\n\n");
+            ChatRequest overridden = new ChatRequest(
+                    request().messages(),
+                    request().reminders(),
+                    request().toolSelection(),
+                    OptionalInt.of(999));
+
+            LlmException exception = assertThrows(LlmException.class,
+                    () -> client(server).streamChat(overridden, text -> { }));
+            JsonNode body = new ObjectMapper().readTree(server.takeRequest().body());
+
+            assertEquals(LlmErrorType.OUTPUT_LIMIT, exception.type());
+            assertEquals(999, body.path("max_tokens").asInt());
         }
     }
 

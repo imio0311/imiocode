@@ -1,9 +1,11 @@
 package io.imiocode.agent;
 
 import io.imiocode.llm.TokenUsage;
+import io.imiocode.llm.LlmErrorType;
 import io.imiocode.tool.ToolExecutionEvent;
 
 import java.util.Objects;
+import java.time.Duration;
 
 /**
  * Agent 向 UI 发布的领域事件。事件不会暴露 Provider 原始元数据。
@@ -19,6 +21,27 @@ public sealed interface AgentEvent {
     record IterationStarted(int iteration) implements AgentEvent {
         public IterationStarted {
             requirePositive(iteration, "iteration");
+        }
+    }
+
+    record RetryScheduled(
+            int iteration,
+            int nextAttempt,
+            LlmErrorType reason,
+            Duration delay,
+            int outputTokenLimit
+    ) implements AgentEvent {
+        public RetryScheduled {
+            requirePositive(iteration, "iteration");
+            if (nextAttempt < 2 || nextAttempt > 4) {
+                throw new IllegalArgumentException("nextAttempt 必须在 2 到 4 之间");
+            }
+            reason = Objects.requireNonNull(reason, "reason 不能为空");
+            delay = Objects.requireNonNull(delay, "delay 不能为空");
+            if (delay.isNegative()) {
+                throw new IllegalArgumentException("delay 不能为负数");
+            }
+            requirePositive(outputTokenLimit, "outputTokenLimit");
         }
     }
 

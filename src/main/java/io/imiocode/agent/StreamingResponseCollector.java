@@ -26,10 +26,26 @@ public final class StreamingResponseCollector {
             int iteration,
             AgentEventListener listener
     ) throws LlmException {
+        return collect(request, iteration, 1, listener, (index, call) -> {
+        });
+    }
+
+    public ChatResponse collect(
+            ChatRequest request,
+            int iteration,
+            int attempt,
+            AgentEventListener listener,
+            ToolCallCompletionListener toolCalls
+    ) throws LlmException {
         Objects.requireNonNull(request, "request 不能为空");
         if (iteration <= 0) {
             throw new IllegalArgumentException("iteration 必须大于 0");
         }
+        if (attempt <= 0) {
+            throw new IllegalArgumentException("attempt 必须大于 0");
+        }
+        ToolCallCompletionListener checkedToolCalls =
+                Objects.requireNonNull(toolCalls, "toolCalls 不能为空");
         AgentEventListener checkedListener =
                 Objects.requireNonNullElse(listener, AgentEventListener.NOOP);
         AtomicInteger completionCount = new AtomicInteger();
@@ -49,6 +65,8 @@ public final class StreamingResponseCollector {
                         started.id(),
                         started.name()
                 ));
+            } else if (event instanceof LlmEvent.ToolCallCompleted completed) {
+                checkedToolCalls.onCompleted(completed.index(), completed.call());
             } else if (event instanceof LlmEvent.StreamCompleted) {
                 completionCount.incrementAndGet();
             }
@@ -68,5 +86,10 @@ public final class StreamingResponseCollector {
                 response.hasToolCalls()
         ));
         return response;
+    }
+
+    @FunctionalInterface
+    public interface ToolCallCompletionListener {
+        void onCompleted(int originalIndex, io.imiocode.tool.ToolCall call);
     }
 }

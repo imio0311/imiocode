@@ -1,10 +1,12 @@
 package io.imiocode.agent;
 
 import io.imiocode.llm.TokenUsage;
+import io.imiocode.llm.LlmErrorType;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -36,5 +38,15 @@ class AgentEventTest {
         assertFalse(fields.contains("encrypted"));
         assertFalse(fields.contains("jsonfragment"));
         assertFalse(fields.contains("arguments"));
+    }
+
+    @Test
+    void validatesSafeRetryEvent() {
+        assertDoesNotThrow(() -> new AgentEvent.RetryScheduled(
+                1, 2, LlmErrorType.NETWORK, Duration.ofSeconds(1), 8_000));
+        assertThrows(IllegalArgumentException.class, () -> new AgentEvent.RetryScheduled(
+                1, 5, LlmErrorType.NETWORK, Duration.ZERO, 8_000));
+        assertThrows(IllegalArgumentException.class, () -> new AgentEvent.RetryScheduled(
+                1, 2, LlmErrorType.NETWORK, Duration.ofSeconds(-1), 8_000));
     }
 }

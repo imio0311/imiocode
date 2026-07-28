@@ -50,6 +50,20 @@ public final class ToolRegistry {
         return findEnabled(name);
     }
 
+    public synchronized ToolResolution resolve(String name, ToolSelection selection) {
+        Objects.requireNonNull(selection, "selection");
+        if (name == null || !tools.containsKey(name)) {
+            return ToolResolution.unavailable(ToolAvailability.UNKNOWN);
+        }
+        if (!enabled.contains(name)) {
+            return ToolResolution.unavailable(ToolAvailability.DISABLED);
+        }
+        if (!selection.allows(name)) {
+            return ToolResolution.unavailable(ToolAvailability.DISALLOWED);
+        }
+        return ToolResolution.available(tools.get(name));
+    }
+
     public synchronized Set<String> enabledNames() {
         return Set.copyOf(enabled);
     }

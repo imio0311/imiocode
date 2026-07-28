@@ -56,7 +56,11 @@ public final class ImioCodeApplication {
             registry.register(new GrepTool(policy, limits, redactor));
 
             client = new LlmClientFactory().create(config, registry);
-            Agent agent = new Agent(client, registry, config.agent());
+            Agent agent = new Agent(
+                    client,
+                    registry,
+                    config.agent(),
+                    config.maxOutputTokens());
             session = new ConversationSession(agent);
             terminal = new JLineTerminalUi(redactor);
             terminal.showWelcome(new UiContext(

@@ -7,6 +7,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 import io.imiocode.tool.core.BashTool;
 import io.imiocode.tool.core.EditFileTool;
 import io.imiocode.tool.core.GlobTool;
@@ -54,6 +55,25 @@ class ToolRegistryTest {
         assertThrows(IllegalArgumentException.class, () -> registry.register(new StubTool("alpha")));
         assertThrows(IllegalArgumentException.class, () -> registry.disable("missing"));
         assertFalse(registry.findEnabled("missing").isPresent());
+    }
+
+    @Test
+    void resolvesUnknownDisabledDisallowedAndAvailableSeparately() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new StubTool("read"));
+        registry.register(new StubTool("write"));
+        registry.disable("write");
+
+        assertEquals(ToolAvailability.UNKNOWN,
+                registry.resolve("missing", ToolSelection.allEnabled()).availability());
+        assertEquals(ToolAvailability.DISABLED,
+                registry.resolve("write", ToolSelection.allEnabled()).availability());
+        assertEquals(ToolAvailability.DISALLOWED,
+                registry.resolve("read", ToolSelection.only(Set.of())).availability());
+        ToolResolution available =
+                registry.resolve("read", ToolSelection.only(Set.of("read")));
+        assertEquals(ToolAvailability.AVAILABLE, available.availability());
+        assertTrue(available.tool().isPresent());
     }
 
     @Test

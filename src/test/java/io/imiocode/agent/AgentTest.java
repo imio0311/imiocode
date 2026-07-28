@@ -139,6 +139,33 @@ class AgentTest {
         assertFalse(result.error().orElseThrow().safeMessage().contains("终端故障细节"));
     }
 
+    @Test
+    void thirdUnknownToolStopsTaskBeforeFollowingToolRuns() {
+        AtomicInteger validRuns = new AtomicInteger();
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(tool("valid", ToolRisk.LOW, validRuns));
+        ChatResponse response = new ChatResponse(new ChatMessage(
+                MessageRole.ASSISTANT,
+                List.of(
+                        new ToolCallPart(call("u1", "missing1")),
+                        new ToolCallPart(call("u2", "missing2")),
+                        new ToolCallPart(call("u3", "missing3")),
+                        new ToolCallPart(call("v1", "valid")))));
+        SequencedClient client = new SequencedClient(List.of(response));
+        List<AgentEvent> events = new ArrayList<>();
+
+        AgentResult result;
+        try (Agent agent = new Agent(client, registry, config(3))) {
+            result = agent.run(request("测试未知工具"), events::add);
+        }
+
+        assertEquals(AgentStopReason.TOO_MANY_UNKNOWN_TOOLS, result.stopReason());
+        assertEquals(0, validRuns.get());
+        assertEquals(1, client.requests.size());
+        assertEquals(1, events.stream()
+                .filter(AgentEvent.TaskStopped.class::isInstance).count());
+    }
+
     private static AgentConfig config(int maxIterations) {
         return new AgentConfig(maxIterations, Duration.ofSeconds(5), 2);
     }

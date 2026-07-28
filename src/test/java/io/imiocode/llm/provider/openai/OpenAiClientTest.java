@@ -27,6 +27,7 @@ import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -74,6 +75,27 @@ class OpenAiClientTest {
                     () -> client(server).streamChat(request(), text -> { }));
 
             assertEquals(LlmErrorType.PROTOCOL, exception.type());
+        }
+    }
+
+    @Test
+    void mapsOutputLimitAndUsesRequestOverride() throws Exception {
+        try (MockLlmServer server = new MockLlmServer()) {
+            server.enqueueSse("event: response.incomplete\n"
+                    + "data: {\"type\":\"response.incomplete\",\"response\":"
+                    + "{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n");
+            ChatRequest overridden = new ChatRequest(
+                    request().messages(),
+                    request().reminders(),
+                    request().toolSelection(),
+                    OptionalInt.of(999));
+
+            LlmException exception = assertThrows(LlmException.class,
+                    () -> client(server).streamChat(overridden, text -> { }));
+            JsonNode body = new ObjectMapper().readTree(server.takeRequest().body());
+
+            assertEquals(LlmErrorType.OUTPUT_LIMIT, exception.type());
+            assertEquals(999, body.path("max_output_tokens").asInt());
         }
     }
 

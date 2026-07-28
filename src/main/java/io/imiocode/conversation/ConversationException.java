@@ -118,6 +118,7 @@ public final class ConversationException extends Exception {
             case MAX_ITERATIONS -> "已达到 Agent 最大循环轮数";
             case TIMEOUT -> "Agent 任务执行超时";
             case CANCELLED -> "Agent 任务已取消";
+            case TOO_MANY_UNKNOWN_TOOLS -> "模型连续请求不存在的工具，Agent 已停止";
             case ERROR -> error == null ? "Agent 执行失败" : error.safeMessage();
             case FINAL_RESPONSE -> throw new IllegalArgumentException("成功结果不能转换为异常");
         };

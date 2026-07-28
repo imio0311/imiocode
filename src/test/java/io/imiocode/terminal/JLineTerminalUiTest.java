@@ -1,6 +1,9 @@
 package io.imiocode.terminal;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import io.imiocode.agent.AgentEvent;
+import io.imiocode.agent.AgentStopReason;
+import io.imiocode.llm.LlmErrorType;
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
@@ -16,6 +19,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -23,6 +27,31 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JLineTerminalUiTest {
+    @Test
+    void rendersRetryAndUnknownToolStopInPlainMode() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        Terminal terminal = TerminalBuilder.builder()
+                .dumb(true)
+                .type(Terminal.TYPE_DUMB)
+                .streams(new ByteArrayInputStream(new byte[0]), output)
+                .encoding(StandardCharsets.UTF_8)
+                .build();
+        JLineTerminalUi ui = new JLineTerminalUi(terminal);
+
+        ui.beginAssistantResponse();
+        ui.appendAssistantText("半截");
+        ui.showRetry(new AgentEvent.RetryScheduled(
+                1, 2, LlmErrorType.NETWORK, Duration.ofSeconds(1), 16_000));
+        ui.showAgentStop(AgentStopReason.TOO_MANY_UNKNOWN_TOOLS, false);
+        String text = output.toString(StandardCharsets.UTF_8);
+
+        assertTrue(text.contains("半截"));
+        assertTrue(text.contains("[重试]"));
+        assertTrue(text.contains("第 2 次尝试"));
+        assertTrue(text.contains("连续请求不存在的工具"));
+        ui.close();
+    }
+
     @Test
     void readsUtf8AndFormatsAssistantAndErrors() throws Exception {
         ByteArrayInputStream input = new ByteArrayInputStream("你好\n".getBytes(StandardCharsets.UTF_8));

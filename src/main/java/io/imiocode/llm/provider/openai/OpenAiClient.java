@@ -155,7 +155,8 @@ public final class OpenAiClient implements LlmClient {
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", config.model());
         root.put("stream", true);
-        root.put("max_output_tokens", config.maxOutputTokens());
+        root.put("max_output_tokens",
+                request.outputTokenLimit().orElse(config.maxOutputTokens()));
         if (config.thinking().enabled()) {
             ObjectNode reasoning = root.putObject("reasoning");
             reasoning.put("effort", config.thinking().effort().apiValue());
@@ -315,7 +316,17 @@ public final class OpenAiClient implements LlmClient {
                     readUsage(node.path("response").path("usage"), usage);
                     finalResponse.set(assembler.complete(usage.build()));
                 }
-                case "response.failed", "response.incomplete", "error" -> throw abort("OpenAI 未能完成本轮响应");
+                case "response.incomplete" -> {
+                    String reason = node.path("response")
+                            .path("incomplete_details")
+                            .path("reason")
+                            .asText("");
+                    if ("max_output_tokens".equals(reason)) {
+                        throw new StreamAbort(outputLimit("OpenAI 已达到输出 token 上限"));
+                    }
+                    throw abort("OpenAI 未能完成本轮响应");
+                }
+                case "response.failed", "error" -> throw abort("OpenAI 未能完成本轮响应");
                 default -> {
                     // 本章只消费文本和生命周期事件。
                 }
@@ -374,6 +385,10 @@ public final class OpenAiClient implements LlmClient {
 
     private LlmException protocolError(String message, Throwable cause) {
         return new LlmException(LlmErrorType.PROTOCOL, true, null, message, cause);
+    }
+
+    private LlmException outputLimit(String message) {
+        return new LlmException(LlmErrorType.OUTPUT_LIMIT, true, null, message);
     }
 
     private URI endpoint(String path) {

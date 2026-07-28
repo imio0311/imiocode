@@ -1,6 +1,7 @@
 package io.imiocode.terminal;
 
 import io.imiocode.agent.AgentMode;
+import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.AgentStopReason;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.llm.TokenUsage;
@@ -44,6 +45,12 @@ public interface TerminalUi extends AutoCloseable {
     default void showAgentStop(AgentStopReason reason, boolean sideEffectsPossible) {
         String suffix = sideEffectsPossible ? "；部分操作可能已经执行" : "";
         printError("Agent 已停止：" + reason.name().toLowerCase(java.util.Locale.ROOT) + suffix);
+    }
+
+    default void showRetry(AgentEvent.RetryScheduled retry) {
+        printInfo("[重试] 第 " + retry.nextAttempt() + " 次尝试，原因 "
+                + retry.reason().name().toLowerCase(java.util.Locale.ROOT)
+                + "，等待 " + retry.delay().toMillis() + " ms");
     }
 
     void printError(String message);

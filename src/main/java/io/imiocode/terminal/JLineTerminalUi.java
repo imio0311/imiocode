@@ -1,6 +1,7 @@
 package io.imiocode.terminal;
 
 import io.imiocode.agent.AgentMode;
+import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.AgentStopReason;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolExecutionEvent;
@@ -269,6 +270,7 @@ public final class JLineTerminalUi implements TerminalUi {
             case MAX_ITERATIONS -> "已达到最大循环轮数";
             case TIMEOUT -> "任务执行超时";
             case CANCELLED -> "任务已取消";
+            case TOO_MANY_UNKNOWN_TOOLS -> "模型连续请求不存在的工具，任务已停止";
             case ERROR -> "执行失败";
             case FINAL_RESPONSE -> "任务已完成";
         };
@@ -278,6 +280,23 @@ public final class JLineTerminalUi implements TerminalUi {
                 AttributedStyle.DEFAULT.foreground(AttributedStyle.RED),
                 currentMode()
         );
+        writer.flush();
+    }
+
+    @Override
+    public synchronized void showRetry(AgentEvent.RetryScheduled retry) {
+        if (closed.get()) {
+            return;
+        }
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        String delay = retry.delay().isZero()
+                ? "立即"
+                : retry.delay().toMillis() + " ms 后";
+        String line = "[重试] " + delay + "开始第 " + retry.nextAttempt()
+                + " 次尝试；原因=" + retry.reason().name().toLowerCase(java.util.Locale.ROOT)
+                + "；输出上限=" + retry.outputTokenLimit();
+        printStyled(line, AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW), currentMode());
         writer.flush();
     }
 

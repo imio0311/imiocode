@@ -156,7 +156,8 @@ public final class AnthropicClient implements LlmClient {
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", config.model());
         root.put("stream", true);
-        root.put("max_tokens", config.maxOutputTokens());
+        root.put("max_tokens",
+                request.outputTokenLimit().orElse(config.maxOutputTokens()));
         if (config.thinking().enabled()) {
             ThinkingMode mode = thinkingModeResolver.resolve(config);
             ObjectNode thinking = root.putObject("thinking");
@@ -254,7 +255,16 @@ public final class AnthropicClient implements LlmClient {
             String type = node.path("type").asText(event.event());
             switch (type) {
                 case "message_start" -> readUsage(node.path("message").path("usage"), usage);
-                case "message_delta" -> readUsage(node.path("usage"), usage);
+                case "message_delta" -> {
+                    readUsage(node.path("usage"), usage);
+                    if ("max_tokens".equals(node.path("delta").path("stop_reason").asText(""))) {
+                        throw new StreamAbort(new LlmException(
+                                LlmErrorType.OUTPUT_LIMIT,
+                                true,
+                                null,
+                                "Anthropic 已达到输出 token 上限"));
+                    }
+                }
                 case "content_block_start" -> {
                     JsonNode block = node.path("content_block");
                     int index = requireIndex(node);

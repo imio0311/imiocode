@@ -8,5 +8,6 @@ public enum AgentStopReason {
     MAX_ITERATIONS,
     TIMEOUT,
     ERROR,
-    CANCELLED
+    CANCELLED,
+    TOO_MANY_UNKNOWN_TOOLS
 }

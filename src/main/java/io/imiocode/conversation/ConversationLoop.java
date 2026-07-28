@@ -72,6 +72,10 @@ public final class ConversationLoop {
                         } else if (event instanceof AgentEvent.IterationStarted) {
                             finishLines();
                             updateStateIfChanged(UiState.THINKING);
+                        } else if (event instanceof AgentEvent.RetryScheduled retry) {
+                            finishLines();
+                            terminal.showRetry(retry);
+                            updateStateIfChanged(UiState.THINKING);
                         } else if (event instanceof AgentEvent.TextDelta delta) {
                             onTextDelta(delta.text());
                         } else if (event instanceof AgentEvent.ThinkingDelta delta) {

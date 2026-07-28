@@ -150,7 +150,8 @@ public final class DeepSeekClient implements LlmClient {
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", config.model());
         root.put("stream", true);
-        root.put("max_tokens", config.maxOutputTokens());
+        root.put("max_tokens",
+                request.outputTokenLimit().orElse(config.maxOutputTokens()));
         if (config.thinking().enabled()) {
             root.putObject("thinking").put("type", "enabled");
             root.put("reasoning_effort", config.thinking().effort().apiValue());
@@ -319,6 +320,13 @@ public final class DeepSeekClient implements LlmClient {
             JsonNode finishReason = choice.path("finish_reason");
             if (!finishReason.isNull() && !finishReason.isMissingNode()) {
                 String reason = finishReason.asText();
+                if ("length".equals(reason)) {
+                    throw new StreamAbort(new LlmException(
+                            LlmErrorType.OUTPUT_LIMIT,
+                            true,
+                            null,
+                            "DeepSeek 已达到输出 token 上限"));
+                }
                 if (!"stop".equals(reason) && !"tool_calls".equals(reason)) {
                     throw new StreamAbort(protocolError("DeepSeek 响应因 " + reason + " 未正常完成", null));
                 }
