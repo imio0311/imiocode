@@ -43,7 +43,8 @@ public final class Agent implements AutoCloseable {
     private final int initialOutputTokenLimit;
     private final EnvironmentContextProvider environmentContextProvider;
     private final EnvironmentReminderFormatter environmentReminderFormatter;
-    private final AtomicReference<AgentMode> mode = new AtomicReference<>(AgentMode.DO);
+    private final AtomicReference<ModeState> modeState =
+            new AtomicReference<>(new ModeState(AgentMode.DO, false));
     private final AtomicReference<AgentTaskContext> activeTask = new AtomicReference<>();
     private final ScheduledExecutorService watchdog =
             Executors.newSingleThreadScheduledExecutor(
@@ -98,7 +99,7 @@ public final class Agent implements AutoCloseable {
     }
 
     public AgentMode mode() {
-        return mode.get();
+        return modeState.get().mode();
     }
 
     public void switchMode(AgentMode nextMode, AgentEventListener listener) {
@@ -106,9 +107,19 @@ public final class Agent implements AutoCloseable {
         AgentEventListener checkedListener =
                 Objects.requireNonNullElse(listener, AgentEventListener.NOOP);
         ensureOpen();
-        AgentMode previous = mode.getAndSet(nextMode);
-        if (previous != nextMode) {
-            checkedListener.onEvent(new AgentEvent.ModeChanged(previous, nextMode));
+        while (true) {
+            ModeState current = modeState.get();
+            if (current.mode() == nextMode) {
+                return;
+            }
+            boolean exitPending = current.mode() == AgentMode.PLAN
+                    && nextMode == AgentMode.DO;
+            ModeState updated = new ModeState(nextMode, exitPending);
+            if (modeState.compareAndSet(current, updated)) {
+                checkedListener.onEvent(new AgentEvent.ModeChanged(
+                        current.mode(), nextMode));
+                return;
+            }
         }
     }
 
@@ -123,7 +134,8 @@ public final class Agent implements AutoCloseable {
             throw new IllegalStateException("同一时间只能运行一个 Agent 任务");
         }
 
-        AgentMode taskMode = mode.get();
+        TaskModeSnapshot taskModeSnapshot = consumeTaskModeSnapshot();
+        AgentMode taskMode = taskModeSnapshot.mode();
         ToolSelection selection = PlanModePrompt.toolSelection(taskMode);
         SystemReminder environmentReminder = environmentReminderFormatter.format(
                 environmentContextProvider.capture());
@@ -159,6 +171,7 @@ public final class Agent implements AutoCloseable {
                         environmentReminder,
                         sessionReminders,
                         taskMode,
+                        taskModeSnapshot.includeExitReminder(),
                         iteration);
                 StreamingTurnResult turn = turnExecutor.execute(
                         new ChatRequest(
@@ -264,13 +277,34 @@ public final class Agent implements AutoCloseable {
             SystemReminder environmentReminder,
             List<SystemReminder> sessionReminders,
             AgentMode mode,
+            boolean includeExitReminder,
             int iteration
     ) {
         List<SystemReminder> combined = new ArrayList<>(sessionReminders.size() + 2);
         combined.add(environmentReminder);
         combined.addAll(sessionReminders);
         PlanModePrompt.reminder(mode, iteration).ifPresent(combined::add);
+        if (includeExitReminder && iteration == 1) {
+            combined.add(PlanModePrompt.exitReminder());
+        }
         return List.copyOf(combined);
+    }
+
+    private TaskModeSnapshot consumeTaskModeSnapshot() {
+        while (true) {
+            ModeState current = modeState.get();
+            boolean includeExitReminder =
+                    current.mode() == AgentMode.DO
+                            && current.exitReminderPending();
+            ModeState updated = includeExitReminder
+                    ? new ModeState(current.mode(), false)
+                    : current;
+            if (updated == current || modeState.compareAndSet(current, updated)) {
+                return new TaskModeSnapshot(
+                        current.mode(),
+                        includeExitReminder);
+            }
+        }
     }
 
     private static List<ChatMessage> requestMessages(
@@ -358,6 +392,24 @@ public final class Agent implements AutoCloseable {
             cancelActive();
             watchdog.shutdownNow();
             client.close();
+        }
+    }
+
+    private record ModeState(
+            AgentMode mode,
+            boolean exitReminderPending
+    ) {
+        private ModeState {
+            Objects.requireNonNull(mode, "mode 不能为空");
+        }
+    }
+
+    private record TaskModeSnapshot(
+            AgentMode mode,
+            boolean includeExitReminder
+    ) {
+        private TaskModeSnapshot {
+            Objects.requireNonNull(mode, "mode 不能为空");
         }
     }
 }

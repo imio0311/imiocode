@@ -498,3 +498,204 @@ T0
 ```
 
 T10 可以在 T7～T9 期间独立进行，但实际执行仍应避免与同一文件的其他修改交错。
+
+## 兼容补充任务
+
+### 补充文件清单
+
+| 操作 | 文件 | 职责 |
+|---|---|---|
+| 新建 | `src/main/java/io/imiocode/prompt/BuildOptions.java` | 三个可选稳定内容插槽 |
+| 新建 | `src/main/java/io/imiocode/prompt/section/CustomInstructionsSection.java` | 自定义指令模块 |
+| 新建 | `src/main/java/io/imiocode/prompt/section/SkillSection.java` | Skill 文本模块 |
+| 新建 | `src/main/java/io/imiocode/prompt/section/MemorySection.java` | Memory 文本模块 |
+| 修改 | `src/main/java/io/imiocode/prompt/SectionPriority.java` | 增加三个可选模块优先级 |
+| 修改 | `src/main/java/io/imiocode/prompt/SystemPromptBuilder.java` | 空构造、链式注册和带选项默认入口 |
+| 修改 | `src/main/java/io/imiocode/prompt/EnvironmentContext.java` | 架构、模型和 Git 仓库判断 |
+| 修改 | `src/main/java/io/imiocode/prompt/EnvironmentContextCollector.java` | 分字段采集 OS/架构并接收模型 |
+| 修改 | `src/main/java/io/imiocode/prompt/EnvironmentReminderFormatter.java` | 输出新增环境字段 |
+| 修改 | `src/main/java/io/imiocode/agent/PlanModePrompt.java` | 退出 Plan Mode 提醒模板 |
+| 修改 | `src/main/java/io/imiocode/agent/Agent.java` | 原子模式状态与一次性提醒消费 |
+| 修改 | `src/main/java/io/imiocode/ImioCodeApplication.java` | 将配置模型传给环境采集器 |
+| 修改 | `src/test/java/io/imiocode/prompt/SystemPromptBuilderTest.java` | 增量 Builder 和可选模块测试 |
+| 修改 | `src/test/java/io/imiocode/prompt/EnvironmentContextCollectorTest.java` | 新环境字段采集测试 |
+| 修改 | `src/test/java/io/imiocode/prompt/EnvironmentReminderFormatterTest.java` | 新环境字段与缓存隔离测试 |
+| 修改 | `src/test/java/io/imiocode/agent/PlanModePromptTest.java` | 退出提醒模板测试 |
+| 修改 | `src/test/java/io/imiocode/agent/AgentTest.java` | 模式切换生命周期测试 |
+
+## T20：扩展可选模块优先级与配置
+
+**文件：**
+
+- `src/main/java/io/imiocode/prompt/SectionPriority.java`
+- `src/main/java/io/imiocode/prompt/BuildOptions.java`
+
+**依赖：** T19
+
+**步骤：**
+
+1. 在七个核心优先级之后增加 CustomInstructions、Skill、Memory 三个稳定优先级。
+2. 定义不可变 `BuildOptions`，保存三个 Optional 文本字段。
+3. 将 null、空字符串和纯空白归一为空 Optional，非空内容去除首尾空白。
+4. 提供三字符串兼容构造和 `empty()`。
+
+**验证：** 使用 Java 21 运行 `mvn -q -DskipTests compile`，期望编译通过。
+
+## T21：实现三个可选 Prompt 模块
+
+**文件：**
+
+- `src/main/java/io/imiocode/prompt/section/CustomInstructionsSection.java`
+- `src/main/java/io/imiocode/prompt/section/SkillSection.java`
+- `src/main/java/io/imiocode/prompt/section/MemorySection.java`
+
+**依赖：** T20
+
+**步骤：**
+
+1. 每个类只接收已提供文本，不读取文件、环境或外部状态。
+2. 分别生成名称固定为“自定义指令”“Skill”“Memory”的 Section。
+3. 使用 T20 定义的对应优先级。
+4. 复用 Section 的内容校验与不可变行为。
+
+**验证：** 运行 `mvn -q -DskipTests compile`，期望三个模块编译通过。
+
+## T22：扩展 Builder 并验证确定性
+
+**文件：**
+
+- `src/main/java/io/imiocode/prompt/SystemPromptBuilder.java`
+- `src/test/java/io/imiocode/prompt/SystemPromptBuilderTest.java`
+
+**依赖：** T20、T21
+
+**步骤：**
+
+1. 增加空构造器，保留现有列表构造器。
+2. 增加返回当前 Builder 的 `add`，立即拒绝 null。
+3. `build` 使用模块快照执行重名检查、空内容过滤和稳定排序。
+4. 增加 `defaults(BuildOptions)`，按核心七模块、CustomInstructions、Skill、Memory 注册。
+5. 测试乱序链式注册、重复构建、重名、空配置、单配置及全配置顺序。
+6. 断言 `defaults()` 与 `defaults(BuildOptions.empty())` 完全一致。
+
+**验证：** 运行 `mvn -q -Dtest=SystemPromptBuilderTest test`，期望全部通过。
+
+## T23：扩展环境上下文模型
+
+**文件：**
+
+- `src/main/java/io/imiocode/prompt/EnvironmentContext.java`
+- `src/main/java/io/imiocode/prompt/EnvironmentContextCollector.java`
+
+**依赖：** T19
+
+**步骤：**
+
+1. 为环境上下文增加 architecture 和 model。
+2. 保留旧五参数构造器，并为新增字段使用固定 `unknown`。
+3. 根据 Git 状态实现 `Optional<Boolean> isGitRepository()`。
+4. 为采集器增加接收模型的构造器，旧构造器继续使用固定 `unknown`。
+5. 将 OS 名称和架构拆成两个系统属性采集结果。
+
+**验证：** 运行 `mvn -q -Dtest=EnvironmentContextCollectorTest test`，期望兼容和新增字段断言全部通过。
+
+## T24：格式化扩展环境提醒
+
+**文件：**
+
+- `src/main/java/io/imiocode/prompt/EnvironmentReminderFormatter.java`
+- `src/test/java/io/imiocode/prompt/EnvironmentReminderFormatterTest.java`
+
+**依赖：** T23
+
+**步骤：**
+
+1. 按固定顺序加入架构、Git 仓库状态和模型。
+2. Git 仓库状态分别显示是、否、未知。
+3. 保持 dirty 文件名、命令输出和环境变量值不进入提醒。
+4. 测试完整字段、三态 Git 仓库值和 XML 包装。
+5. 断言新增动态字段不会出现在默认 System Prompt。
+
+**验证：** 运行 `mvn -q -Dtest=EnvironmentReminderFormatterTest,SystemPromptBuilderTest test`，期望全部通过。
+
+## T25：把当前模型接入应用环境采集
+
+**文件：** `src/main/java/io/imiocode/ImioCodeApplication.java`
+
+**依赖：** T23
+
+**步骤：**
+
+1. 使用新增采集器构造器传入 `config.model()`。
+2. 保持工作区、Clock 和 Git 超时设置不变。
+3. 不把模型添加到 System Prompt Builder 或 Provider system 字段。
+
+**验证：** 运行 `mvn -q -DskipTests compile`，期望应用主代码编译通过。
+
+## T26：实现退出 Plan Mode 一次性提醒
+
+**文件：**
+
+- `src/main/java/io/imiocode/agent/PlanModePrompt.java`
+- `src/main/java/io/imiocode/agent/Agent.java`
+
+**依赖：** T19
+
+**步骤：**
+
+1. 在 `PlanModePrompt` 定义固定 `ROUND` 退出提醒。
+2. 用单个 `AtomicReference<ModeState>` 替换独立模式原子值。
+3. Plan→DO 时设置 pending，DO→DO 不新增，切回 Plan 时清除。
+4. 任务启动时用 CAS 原子取得模式并消费 pending。
+5. 只在下一普通任务 iteration=1 注入退出提醒。
+6. 保持 TaskStarted、ModeChanged、工具选择和 Plan 周期提醒行为不变。
+
+**验证：** 运行 `mvn -q -DskipTests compile`，期望 Agent 主代码编译通过。
+
+## T27：验证模式切换生命周期
+
+**文件：**
+
+- `src/test/java/io/imiocode/agent/PlanModePromptTest.java`
+- `src/test/java/io/imiocode/agent/AgentTest.java`
+
+**依赖：** T26
+
+**步骤：**
+
+1. 测试退出提醒的 ROUND 作用域和固定内容。
+2. 测试初始 DO 不注入。
+3. 测试 Plan→DO 后下一任务第一轮恰好注入一次，第二轮及再下一任务不注入。
+4. 测试 Plan→DO→Plan 会取消 pending。
+5. 测试 DO→DO 不产生退出提醒。
+6. 断言退出提醒不进入最终 trajectory。
+
+**验证：** 运行 `mvn -q -Dtest=PlanModePromptTest,AgentTest,ConversationLoopTest test`，期望全部通过。
+
+## T28：执行补充功能完整回归
+
+**文件：** 本补充文件清单中涉及的实现、测试与 Ch5 文档
+
+**依赖：** T20～T27
+
+**步骤：**
+
+1. 运行所有补充功能定向测试。
+2. 运行 Java 21 `mvn -q clean verify`。
+3. 比较测试数量，不得低于当前 185 项基线。
+4. 检查可执行 JAR 仍能生成和启动。
+5. 检查 Git diff 和暂存范围，排除 `config.yaml`、`claude.md` 和 `hello.txt`。
+
+**验证：** `mvn -q clean verify` 退出码为 0，Surefire 失败数和错误数均为 0，并生成 `target/imiocode-0.2.0-SNAPSHOT-all.jar`。
+
+## 提交点 E：兼容补充
+
+完成 T20～T28 后创建新的本地提交。提交只包含补充 spec、plan、task、checklist、实现和测试，不包含用户原有文件改动。
+
+## 补充执行顺序
+
+```text
+T20 → T21 → T22 ──────────────┐
+T23 → T24 → T25 ──────────────┼→ T28 → 提交点 E
+T26 → T27 ────────────────────┘
+```

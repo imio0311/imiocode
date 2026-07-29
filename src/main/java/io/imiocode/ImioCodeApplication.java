@@ -68,7 +68,8 @@ public final class ImioCodeApplication {
                     new EnvironmentContextCollector(
                             workspace,
                             Clock.systemDefaultZone(),
-                            Duration.ofSeconds(2)),
+                            Duration.ofSeconds(2),
+                            config.model()),
                     new EnvironmentReminderFormatter());
             session = new ConversationSession(agent);
             terminal = new JLineTerminalUi(redactor);

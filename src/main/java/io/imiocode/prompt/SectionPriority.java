@@ -8,7 +8,10 @@ public enum SectionPriority {
     CODE_QUALITY(400),
     SECURITY(500),
     TASK_PATTERN(600),
-    OUTPUT_STYLE(700);
+    OUTPUT_STYLE(700),
+    CUSTOM_INSTRUCTIONS(800),
+    SKILL(900),
+    MEMORY(950);
 
     private final int value;
 

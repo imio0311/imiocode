@@ -42,4 +42,14 @@ class PlanModePromptTest {
         assertThrows(IllegalArgumentException.class,
                 () -> PlanModePrompt.reminder(AgentMode.PLAN, 0));
     }
+
+    @Test
+    void exitReminderRestoresNormalExecutionWithRoundScope() {
+        SystemReminder reminder = PlanModePrompt.exitReminder();
+
+        assertEquals(ReminderScope.ROUND, reminder.scope());
+        assertTrue(reminder.content().contains("已退出 Plan Mode"));
+        assertTrue(reminder.content().contains("修改文件"));
+        assertTrue(reminder.content().contains("执行必要命令"));
+    }
 }

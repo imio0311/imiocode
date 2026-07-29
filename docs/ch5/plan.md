@@ -699,3 +699,201 @@ docs/ch5/
 | 真实缓存验收 | 使用当前 DeepSeek 配置，顺序发送两次相同稳定前缀请求 | 第一请求完成后再发第二请求，避免并发造成缓存尚未建立；只接受真实 usage |
 | 默认测试策略 | Mock Server 验证三家请求，真实 API 测试手动执行 | 单元测试保持确定、免费且不依赖 API Key |
 | Agent Loop | 只改变请求输入组装，不修改循环、重试、调度和终态 | 控制本章范围并降低 Ch4 回归风险 |
+
+## 兼容补充设计
+
+### 架构概览
+
+采用兼容扩展设计，保持现有 system、messages、tools 三通道边界不变：
+
+1. `SystemPromptBuilder` 增加空构造和链式注册能力，保留列表构造和默认七模块入口。
+2. `BuildOptions` 保存自定义指令、Skill、Memory 三段可选稳定文本，由默认构建入口追加到七个核心模块之后。
+3. `EnvironmentContext` 增加架构和模型，并根据 Git 状态提供是否为仓库；新增字段继续通过环境提醒进入 messages。
+4. Agent 使用单个原子模式状态保存当前模式和退出提醒待消费标记，在下一个普通任务启动时原子消费。
+
+```text
+稳定：七个核心模块 + 非空可选模块 → System Prompt
+动态：扩展环境 + 会话提醒 + 轨迹 + Plan/退出提醒 → messages
+工具：当前模式允许的定义 → tools
+```
+
+### 核心数据结构
+
+`SectionPriority` 在原有 100～700 优先级之后增加：
+
+```java
+CUSTOM_INSTRUCTIONS(800),
+SKILL(900),
+MEMORY(950)
+```
+
+`SystemPromptBuilder` 补充：
+
+```java
+public SystemPromptBuilder();
+public SystemPromptBuilder add(PromptSection section);
+public static SystemPromptBuilder defaults(BuildOptions options);
+```
+
+现有列表构造器、`defaults()` 和 `build()` 保留。
+
+`BuildOptions`：
+
+```java
+public record BuildOptions(
+        Optional<String> customInstructions,
+        Optional<String> skillContent,
+        Optional<String> memoryContent
+) {
+    public BuildOptions(
+            String customInstructions,
+            String skillContent,
+            String memoryContent
+    );
+
+    public static BuildOptions empty();
+}
+```
+
+三个固定可选模块：
+
+```java
+public final class CustomInstructionsSection implements PromptSection;
+public final class SkillSection implements PromptSection;
+public final class MemorySection implements PromptSection;
+```
+
+`EnvironmentContext` 扩展：
+
+```java
+public record EnvironmentContext(
+        Path workspace,
+        String operatingSystem,
+        String architecture,
+        String shell,
+        ZonedDateTime capturedAt,
+        GitContext git,
+        String model
+) {
+    public EnvironmentContext(
+            Path workspace,
+            String operatingSystem,
+            String shell,
+            ZonedDateTime capturedAt,
+            GitContext git
+    );
+
+    public Optional<Boolean> isGitRepository();
+}
+```
+
+旧五参数构造器将 architecture 和 model 固定为 `unknown`。
+
+`EnvironmentContextCollector` 增加接收模型名的构造器，同时保留旧构造器：
+
+```java
+public EnvironmentContextCollector(
+        Path workspace,
+        Clock clock,
+        Duration gitTimeout,
+        String model
+);
+```
+
+`PlanModePrompt` 增加：
+
+```java
+public static SystemReminder exitReminder();
+```
+
+Agent 内部增加：
+
+```java
+private record ModeState(
+        AgentMode mode,
+        boolean exitReminderPending
+) {}
+
+private record TaskModeSnapshot(
+        AgentMode mode,
+        boolean includeExitReminder
+) {}
+```
+
+### 模块设计
+
+#### Builder 与可选模块
+
+- 空构造器创建可增量注册的 Builder。
+- `add` 立即拒绝空模块并返回当前 Builder。
+- `build` 对当前模块建立快照，检查重名、过滤空内容，并按优先级和名称稳定排序。
+- `BuildOptions` 将 null、空字符串和纯空白内容归一为空 Optional。
+- `defaults(BuildOptions)` 先注册七个核心模块，再按 CustomInstructions、Skill、Memory 注册非空模块。
+- `PromptAssembler` 仍在构造时只调用一次 `build()`，Provider 请求期间不改变 System Prompt。
+
+#### 环境上下文
+
+- OS 与架构分别读取 `os.name` 和 `os.arch`。
+- 当前模型由 `ImioCodeApplication` 从已解析的应用配置传给采集器。
+- Git clean/dirty 表示仓库为是，NOT_REPOSITORY 表示否，UNAVAILABLE 表示未知。
+- 环境提醒字段顺序固定为：工作目录、OS、架构、Shell、时间、时区、Git 仓库、Git 分支、Git 状态、模型。
+
+#### 退出 Plan Mode
+
+模式状态变化规则：
+
+```text
+初始：DO, pending=false
+PLAN → DO：DO, pending=true
+下一普通任务启动：原子消费 pending
+DO → DO：不创建 pending
+PLAN → DO → PLAN：清除 pending
+```
+
+任务开始时原子取得 `TaskModeSnapshot`。`includeExitReminder=true` 时，仅在 iteration=1 追加 `ROUND` 作用域的退出提醒。退出提醒不加入 trajectory 或正式历史。
+
+### 文件组织
+
+```text
+src/main/java/io/imiocode/
+├── ImioCodeApplication.java
+├── agent/
+│   ├── Agent.java
+│   └── PlanModePrompt.java
+└── prompt/
+    ├── BuildOptions.java
+    ├── SectionPriority.java
+    ├── SystemPromptBuilder.java
+    ├── EnvironmentContext.java
+    ├── EnvironmentContextCollector.java
+    ├── EnvironmentReminderFormatter.java
+    └── section/
+        ├── CustomInstructionsSection.java
+        ├── SkillSection.java
+        └── MemorySection.java
+```
+
+测试修改：
+
+```text
+src/test/java/io/imiocode/
+├── prompt/
+│   ├── SystemPromptBuilderTest.java
+│   ├── EnvironmentContextCollectorTest.java
+│   └── EnvironmentReminderFormatterTest.java
+└── agent/
+    ├── AgentTest.java
+    └── PlanModePromptTest.java
+```
+
+### 技术决策
+
+| 决策点 | 选择 | 理由 |
+|---|---|---|
+| Builder 扩展 | 保留列表构造，增加空构造与 `add` | 向后兼容并支持链式注册 |
+| 可选内容顺序 | 位于七个核心模块之后 | 不改变已验证的核心顺序 |
+| 空内容处理 | 在 `BuildOptions` 中归一为空 Optional | 不产生空标题或无意义缓存变化 |
+| 环境模型来源 | 应用配置显式传入 | 与真实 Provider 配置一致，不重复读取环境变量 |
+| Git 仓库状态 | `Optional<Boolean>` | 区分非仓库和无法判断 |
+| 模式状态 | 单个原子不可变状态 | 避免模式与 pending 两个原子变量产生竞态 |
+| 退出提醒 | 下一普通任务第一轮一次 | 明确模式变化且不污染历史 |

@@ -12,10 +12,64 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SystemPromptBuilderTest {
+
+    @Test
+    void incrementallyRegistersShuffledSectionsAndMatchesDefaults() {
+        var builder = new SystemPromptBuilder();
+
+        assertSame(builder, builder.add(new OutputStyleSection()));
+        builder.add(new SecuritySection())
+                .add(new IdentitySection())
+                .add(new TaskPatternSection())
+                .add(new ToolUsageSection())
+                .add(new CodeQualitySection())
+                .add(new BehaviorSection());
+
+        assertEquals(SystemPromptBuilder.defaults().build(), builder.build());
+        assertEquals(builder.build(), builder.build());
+    }
+
+    @Test
+    void defaultsWithEmptyOrBlankOptionsRemainCompatible() {
+        String expected = SystemPromptBuilder.defaults().build();
+
+        assertEquals(expected,
+                SystemPromptBuilder.defaults(BuildOptions.empty()).build());
+        assertEquals(expected,
+                SystemPromptBuilder.defaults(
+                        new BuildOptions(null, " ", "\n")).build());
+    }
+
+    @Test
+    void appendsOnlyConfiguredOptionalSectionsInStableOrder() {
+        String customOnly = SystemPromptBuilder.defaults(
+                new BuildOptions("  项目自定义  ", null, null)).build();
+        assertTrue(customOnly.contains("## 自定义指令\n项目自定义"));
+        assertFalse(customOnly.contains("## Skill"));
+        assertFalse(customOnly.contains("## Memory"));
+
+        String all = SystemPromptBuilder.defaults(
+                new BuildOptions("自定义", "技能", "记忆")).build();
+        assertBefore(all, "## 输出风格", "## 自定义指令");
+        assertBefore(all, "## 自定义指令", "## Skill");
+        assertBefore(all, "## Skill", "## Memory");
+        assertEquals(all, SystemPromptBuilder.defaults(
+                new BuildOptions("自定义", "技能", "记忆")).build());
+    }
+
+    @Test
+    void emptyIncrementalBuilderAndNullSectionFailClearly() {
+        var builder = new SystemPromptBuilder();
+
+        assertThrows(NullPointerException.class, () -> builder.add(null));
+        assertThrows(IllegalStateException.class, builder::build);
+    }
 
     @Test
     void buildsSevenSectionsInStablePriorityOrder() {

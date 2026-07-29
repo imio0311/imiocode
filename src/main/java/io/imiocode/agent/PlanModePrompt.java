@@ -23,6 +23,9 @@ public final class PlanModePrompt {
     private static final SystemReminder CONCISE_PLAN_REMINDER = new SystemReminder(
             ReminderScope.ROUND,
             "保持 Plan Mode：只读调查，不做修改；信息充分后输出可执行计划。");
+    private static final SystemReminder EXIT_PLAN_REMINDER = new SystemReminder(
+            ReminderScope.ROUND,
+            "已退出 Plan Mode，当前恢复普通执行模式；可以根据用户任务修改文件并执行必要命令。");
 
     private PlanModePrompt() {
     }
@@ -53,5 +56,9 @@ public final class PlanModePrompt {
         return Optional.of((iteration - 1) % 5 == 0
                 ? FULL_PLAN_REMINDER
                 : CONCISE_PLAN_REMINDER);
+    }
+
+    public static SystemReminder exitReminder() {
+        return EXIT_PLAN_REMINDER;
     }
 }

@@ -226,8 +226,86 @@
 - [x] **tmux 不可用时明确记录阻塞且不标记端到端通过（AC13）**  
   （验证：保存 `tmux -V` 或 WSL/tmux 启动失败的实际输出；仅记录阻塞，不用普通终端结果替代。）
 
+## 兼容补充验收
+
+### 增量 Builder
+
+- [x] **空 Builder 可以链式注册模块（AC14）**  
+  （验证：运行 `mvn -q -Dtest=SystemPromptBuilderTest test`，观察空构造与连续 `add` 返回当前 Builder 的断言。）
+
+- [x] **乱序增量注册与默认七模块输出完全一致（AC14）**  
+  （验证：以乱序逐个注册七个模块，比较实际完整字符串与 `defaults().build()`。）
+
+- [x] **增量 Builder 继续过滤空模块并拒绝重名（AC14）**  
+  （验证：运行空内容和重名场景，期望空标题不存在且重名构建抛出明确异常。）
+
+- [x] **现有列表构造和无参数 `defaults()` 行为保持兼容（AC14、AC18）**  
+  （验证：运行原有 Builder 测试，比较 `defaults()` 与 `defaults(BuildOptions.empty())`。）
+
+### 可选稳定模块
+
+- [x] **三个可选内容均为空时不产生额外标题（AC15）**  
+  （验证：用 null、空字符串和纯空白构造选项，期望输出只包含七个核心模块。）
+
+- [x] **单个可选内容只产生对应模块（AC15）**  
+  （验证：分别只提供 CustomInstructions、Skill、Memory，期望每次只新增一个对应标题。）
+
+- [x] **三个可选模块按 CustomInstructions → Skill → Memory 稳定排列（AC15）**  
+  （验证：同时提供三段唯一文本，比较标题位置和重复构建结果。）
+
+- [x] **可选模块不读取文件、环境或外部状态（AC15）**  
+  （验证：在空临时目录中仅传入内存文本完成构建，期望输出只包含提供的文本且不产生外部访问。）
+
+### 环境摘要扩展
+
+- [x] **环境提醒包含架构、Git 仓库状态和当前模型（AC16）**  
+  （验证：运行 `mvn -q -Dtest=EnvironmentContextCollectorTest,EnvironmentReminderFormatterTest test`，检查三个新增字段。）
+
+- [x] **Git 仓库状态能区分是、否和未知（AC16）**  
+  （验证：分别使用 clean/dirty、not-repository、unavailable 上下文，期望格式化为对应三态。）
+
+- [x] **旧环境构造路径继续可用并使用 unknown 新字段（AC16、AC18）**  
+  （验证：使用旧五参数上下文构造器和旧采集器构造器，期望编译通过且新字段为固定 unknown。）
+
+- [x] **新增环境字段不进入 System Prompt 或正式历史（AC16）**  
+  （验证：在环境值中放入唯一标记，检查 Provider system 和任务完成后的 history 均不存在该标记。）
+
+### 退出 Plan Mode
+
+- [x] **退出提醒具有 ROUND 作用域且文本明确恢复执行能力（AC17）**  
+  （验证：运行 `mvn -q -Dtest=PlanModePromptTest test`，检查作用域和正文。）
+
+- [x] **初始 DO 和 DO→DO 不产生退出提醒（AC17）**  
+  （验证：捕获对应任务每轮 ChatRequest，搜索退出提醒标记，期望不存在。）
+
+- [x] **Plan→DO 后仅下一任务第一轮出现一次退出提醒（AC17）**  
+  （验证：运行至少两轮的下一普通任务，再运行一个新任务；计数分别为 1、0、0。）
+
+- [x] **Plan→DO→Plan 会取消待注入退出提醒（AC17）**  
+  （验证：按顺序切换模式后运行 Plan 任务，期望只有 Plan 提醒，没有退出提醒。）
+
+- [x] **退出提醒不进入 trajectory 或正式会话历史（AC17）**  
+  （验证：任务完成后搜索 AgentResult trajectory 和 ConversationSession history，期望均不存在退出提醒。）
+
+### 补充回归
+
+- [x] **补充功能定向测试全部通过（AC18）**  
+  （验证：运行 `SystemPromptBuilderTest`、环境测试、`PlanModePromptTest`、`AgentTest` 和 `ConversationLoopTest`，期望退出码均为 0。）
+
+- [x] **Java 21 完整构建继续通过且测试数不少于 185（AC18）**  
+  （验证：运行 `mvn -q clean verify`，汇总 Surefire 报告并与 185 项基线比较。）
+
+- [x] **可执行 JAR 仍可生成和启动（AC18）**  
+  （验证：检查 all.jar 存在，输入 `/exit` 启动后正常退出且进程退出码为 0。）
+
+- [x] **补充提交不包含配置和用户原有文件（AC18）**  
+  （验证：检查 staged names，期望不存在 `config.yaml`、`claude.md` 和 `hello.txt`。）
+
 ## 本次验收记录（2026-07-29）
 
+- 兼容补充：增量 Builder、三个可选稳定模块、扩展环境字段和 Plan→DO 一次性提醒均已通过定向测试。
+- 补充后完整构建：51 个套件、195 项测试、0 失败、0 错误、1 项按环境跳过；不少于补充前 185 项基线。
+- 补充后产物：`target/imiocode-0.2.0-SNAPSHOT-all.jar` 已重新生成；主代码变更后实际启动并输入 `/exit`，退出码为 0。
 - Java：Oracle JDK `21.0.3`；Maven `3.9.11` 使用同一 JDK。
 - 完整构建：`mvn -q clean verify` 退出码为 0。
 - 测试报告：51 个套件、185 项测试、0 失败、0 错误、1 项按环境跳过；开发前基线为 161 项。

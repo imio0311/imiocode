@@ -20,13 +20,27 @@ public final class EnvironmentContextCollector implements EnvironmentContextProv
     private final Path workspace;
     private final Clock clock;
     private final Duration gitTimeout;
+    private final String model;
 
     public EnvironmentContextCollector(Path workspace, Clock clock, Duration gitTimeout) {
+        this(workspace, clock, gitTimeout, "unknown");
+    }
+
+    public EnvironmentContextCollector(
+            Path workspace,
+            Clock clock,
+            Duration gitTimeout,
+            String model
+    ) {
         this.workspace = Objects.requireNonNull(workspace, "工作区不能为空")
                 .toAbsolutePath()
                 .normalize();
         this.clock = Objects.requireNonNull(clock, "Clock 不能为空");
         this.gitTimeout = Objects.requireNonNull(gitTimeout, "Git 超时不能为空");
+        if (model == null || model.isBlank()) {
+            throw new IllegalArgumentException("模型不能为空");
+        }
+        this.model = model.trim();
         if (gitTimeout.isZero() || gitTimeout.isNegative()) {
             throw new IllegalArgumentException("Git 超时必须为正数");
         }
@@ -37,15 +51,19 @@ public final class EnvironmentContextCollector implements EnvironmentContextProv
         return new EnvironmentContext(
                 workspace,
                 operatingSystem(),
+                architecture(),
                 shellName(),
                 ZonedDateTime.now(clock),
-                inspectGit());
+                inspectGit(),
+                model);
     }
 
     private static String operatingSystem() {
-        String name = System.getProperty("os.name", "unknown").trim();
-        String arch = System.getProperty("os.arch", "unknown").trim();
-        return (name + " " + arch).trim();
+        return System.getProperty("os.name", "unknown").trim();
+    }
+
+    private static String architecture() {
+        return System.getProperty("os.arch", "unknown").trim();
     }
 
     private static String shellName() {

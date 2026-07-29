@@ -29,7 +29,7 @@ class EnvironmentContextCollectorTest {
                 Instant.parse("2026-07-29T02:30:00Z"),
                 ZoneId.of("Asia/Shanghai"));
         var collector = new EnvironmentContextCollector(
-                tempDir, clock, Duration.ofSeconds(2));
+                tempDir, clock, Duration.ofSeconds(2), "deepseek-chat");
 
         EnvironmentContext context = collector.capture();
 
@@ -37,8 +37,10 @@ class EnvironmentContextCollectorTest {
         assertEquals(2026, context.capturedAt().getYear());
         assertEquals(10, context.capturedAt().getHour());
         assertNotNull(context.operatingSystem());
+        assertNotNull(context.architecture());
         assertNotNull(context.shell());
         assertNotNull(context.git().state());
+        assertEquals("deepseek-chat", context.model());
     }
 
     @Test
@@ -78,6 +80,29 @@ class EnvironmentContextCollectorTest {
 
         assertEquals(GitWorkingTreeState.UNAVAILABLE, context.git().state());
         assertTrue(context.git().branch().isEmpty());
+    }
+
+    @Test
+    void legacyConstructorUsesUnknownModelAndCapturesArchitecture() {
+        var collector = new EnvironmentContextCollector(
+                tempDir,
+                Clock.systemUTC(),
+                Duration.ofSeconds(2));
+
+        EnvironmentContext context = collector.capture();
+
+        assertEquals("unknown", context.model());
+        assertTrue(!context.architecture().isBlank());
+    }
+
+    @Test
+    void rejectsBlankModel() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new EnvironmentContextCollector(
+                        tempDir,
+                        Clock.systemUTC(),
+                        Duration.ofSeconds(2),
+                        " "));
     }
 
     private static int run(Path directory, String... command)

@@ -48,6 +48,7 @@ class AgentTest {
                 toolResponse(call("c1", "read_file")),
                 new ChatResponse("完成")));
 
+        AgentResult result;
         try (Agent agent = new Agent(
                 client,
                 registry,
@@ -55,7 +56,7 @@ class AgentTest {
                 8_192,
                 () -> environment(captures.incrementAndGet()),
                 new EnvironmentReminderFormatter())) {
-            agent.run(request("读取"), AgentEventListener.NOOP);
+            result = agent.run(request("读取"), AgentEventListener.NOOP);
         }
 
         assertEquals(1, captures.get());
@@ -63,6 +64,10 @@ class AgentTest {
         String first = environmentReminder(client.requests.get(0));
         String second = environmentReminder(client.requests.get(1));
         assertEquals(first, second);
+        assertTrue(first.contains("当前模型：model-sentinel"));
+        assertFalse(result.trajectory().stream()
+                .map(ChatMessage::content)
+                .anyMatch(content -> content.contains("model-sentinel")));
     }
 
     @Test
@@ -86,6 +91,72 @@ class AgentTest {
         assertEquals(2, captures.get());
         assertFalse(environmentReminder(client.requests.get(0))
                 .equals(environmentReminder(client.requests.get(1))));
+    }
+
+    @Test
+    void injectsPlanExitReminderOnlyOnNextDoTaskFirstIteration() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(tool("read_file", ToolRisk.LOW, new AtomicInteger()));
+        SequencedClient client = new SequencedClient(List.of(
+                toolResponse(call("c1", "read_file")),
+                new ChatResponse("普通任务完成"),
+                new ChatResponse("下一任务完成")));
+        AgentResult firstTask;
+
+        try (Agent agent = new Agent(
+                client,
+                registry,
+                config(3),
+                8_192,
+                () -> environment(1),
+                new EnvironmentReminderFormatter())) {
+            agent.switchMode(AgentMode.PLAN, AgentEventListener.NOOP);
+            agent.switchMode(AgentMode.DO, AgentEventListener.NOOP);
+            firstTask = agent.run(request("执行任务"), AgentEventListener.NOOP);
+            agent.run(request("下一任务"), AgentEventListener.NOOP);
+        }
+
+        assertTrue(hasExitReminder(client.requests.get(0)));
+        assertFalse(hasExitReminder(client.requests.get(1)));
+        assertFalse(hasExitReminder(client.requests.get(2)));
+        assertFalse(firstTask.trajectory().stream()
+                .map(ChatMessage::content)
+                .anyMatch(content -> content.contains("已退出 Plan Mode")));
+    }
+
+    @Test
+    void initialDoRepeatedDoAndReturnToPlanDoNotInjectExitReminder() {
+        SequencedClient initialDoClient =
+                new SequencedClient(List.of(new ChatResponse("完成")));
+        try (Agent agent = new Agent(
+                initialDoClient,
+                new ToolRegistry(),
+                config(2),
+                8_192,
+                () -> environment(1),
+                new EnvironmentReminderFormatter())) {
+            agent.switchMode(AgentMode.DO, AgentEventListener.NOOP);
+            agent.run(request("普通任务"), AgentEventListener.NOOP);
+        }
+        assertFalse(hasExitReminder(initialDoClient.requests.getFirst()));
+
+        SequencedClient planClient =
+                new SequencedClient(List.of(new ChatResponse("计划")));
+        try (Agent agent = new Agent(
+                planClient,
+                new ToolRegistry(),
+                config(2),
+                8_192,
+                () -> environment(1),
+                new EnvironmentReminderFormatter())) {
+            agent.switchMode(AgentMode.PLAN, AgentEventListener.NOOP);
+            agent.switchMode(AgentMode.DO, AgentEventListener.NOOP);
+            agent.switchMode(AgentMode.PLAN, AgentEventListener.NOOP);
+            agent.run(request("重新规划"), AgentEventListener.NOOP);
+        }
+        assertFalse(hasExitReminder(planClient.requests.getFirst()));
+        assertTrue(planClient.requests.getFirst().reminders().stream()
+                .anyMatch(reminder -> reminder.content().contains("Plan Mode")));
     }
 
     @Test
@@ -232,12 +303,14 @@ class AgentTest {
         return new EnvironmentContext(
                 Path.of("D:/workspace"),
                 "Windows",
+                "amd64",
                 "PowerShell",
                 ZonedDateTime.of(2026, 7, 29, 10, sequence, 0, 0,
                         ZoneId.of("Asia/Shanghai")),
                 new GitContext(
                         Optional.of("ch5"),
-                        GitWorkingTreeState.CLEAN));
+                        GitWorkingTreeState.CLEAN),
+                "model-sentinel");
     }
 
     private static String environmentReminder(ChatRequest request) {
@@ -246,6 +319,12 @@ class AgentTest {
                 .findFirst()
                 .orElseThrow()
                 .content();
+    }
+
+    private static boolean hasExitReminder(ChatRequest request) {
+        return request.reminders().stream()
+                .anyMatch(reminder -> reminder.content()
+                        .contains("已退出 Plan Mode"));
     }
 
     private static AgentRequest request(String text) {
