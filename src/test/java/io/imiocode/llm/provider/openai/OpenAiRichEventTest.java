@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -50,7 +51,7 @@ class OpenAiRichEventTest {
                     data: {"type":"response.output_text.delta","delta":"答案"}
 
                     event: response.completed
-                    data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":11,"output_tokens":6,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":3}}}}
+                    data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":11,"output_tokens":6,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":4},"output_tokens_details":{"reasoning_tokens":3}}}}
 
                     """);
             List<LlmEvent> events = new ArrayList<>();
@@ -72,11 +73,18 @@ class OpenAiRichEventTest {
             assertEquals(6, response.usage().outputTokens().orElseThrow());
             assertEquals(3, response.usage().reasoningTokens().orElseThrow());
             assertEquals(2, response.usage().cacheReadTokens().orElseThrow());
+            assertEquals(4, response.usage().cacheWriteTokens().orElseThrow());
             assertInstanceOf(LlmEvent.StreamCompleted.class, events.getLast());
             assertEquals("high", body.path("reasoning").path("effort").asText());
             assertEquals("detailed", body.path("reasoning").path("summary").asText());
             assertEquals("reasoning.encrypted_content", body.path("include").get(0).asText());
-            assertTrue(body.path("instructions").asText().contains("仅本轮生效"));
+            assertTrue(body.path("instructions").asText().startsWith("## 身份"));
+            assertFalse(body.path("instructions").asText().contains("仅本轮生效"));
+            assertTrue(body.path("input").get(0).path("content").asText()
+                    .contains("<system-reminder>"));
+            assertTrue(body.path("input").get(0).path("content").asText()
+                    .contains("仅本轮生效"));
+            assertFalse(body.toString().contains("cache_control"));
         }
     }
 

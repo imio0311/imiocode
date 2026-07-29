@@ -66,6 +66,20 @@ class EnvironmentContextCollectorTest {
                         tempDir, Clock.systemUTC(), Duration.ZERO));
     }
 
+    @Test
+    void degradesToUnavailableWhenGitCannotInspectWorkspace() {
+        Path missingWorkspace = tempDir.resolve("does-not-exist");
+        var collector = new EnvironmentContextCollector(
+                missingWorkspace,
+                Clock.systemUTC(),
+                Duration.ofMillis(200));
+
+        EnvironmentContext context = collector.capture();
+
+        assertEquals(GitWorkingTreeState.UNAVAILABLE, context.git().state());
+        assertTrue(context.git().branch().isEmpty());
+    }
+
     private static int run(Path directory, String... command)
             throws IOException, InterruptedException {
         Process process = new ProcessBuilder(command)

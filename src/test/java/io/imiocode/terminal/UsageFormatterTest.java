@@ -24,4 +24,21 @@ class UsageFormatterTest {
         assertFalse(formatted.contains("reasoning="));
         assertFalse(formatted.contains("cache-write="));
     }
+
+    @Test
+    void rendersAllKnownUsageFields() {
+        String formatted = formatter.format(
+                new TokenUsageBuilder()
+                        .input(12)
+                        .output(7)
+                        .reasoning(5)
+                        .cacheRead(3)
+                        .cacheWrite(4)
+                        .build());
+
+        assertEquals(
+                "[usage] input=12 · output=7 · reasoning=5"
+                        + " · cache-read=3 · cache-write=4",
+                formatted);
+    }
 }

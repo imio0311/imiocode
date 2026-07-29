@@ -26,6 +26,9 @@ import io.imiocode.llm.ToolResultJson;
 import io.imiocode.llm.transport.HttpErrorMapper;
 import io.imiocode.llm.transport.SseEvent;
 import io.imiocode.llm.transport.SseEventReader;
+import io.imiocode.prompt.ApiPayload;
+import io.imiocode.prompt.PromptAssembler;
+import io.imiocode.prompt.SystemPromptBuilder;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolDefinition;
@@ -54,7 +57,7 @@ public final class DeepSeekClient implements LlmClient {
     private final ObjectMapper objectMapper;
     private final SseEventReader eventReader;
     private final HttpErrorMapper errorMapper;
-    private final ToolRegistry tools;
+    private final PromptAssembler prompts;
     private final ToolResultJson resultJson;
     private final AtomicReference<CompletableFuture<HttpResponse<InputStream>>> activeRequest = new AtomicReference<>();
     private final AtomicReference<InputStream> activeStream = new AtomicReference<>();
@@ -76,12 +79,28 @@ public final class DeepSeekClient implements LlmClient {
             SseEventReader eventReader,
             HttpErrorMapper errorMapper,
             ToolRegistry tools) {
+        this(
+                config,
+                httpClient,
+                objectMapper,
+                eventReader,
+                errorMapper,
+                new PromptAssembler(SystemPromptBuilder.defaults(), tools));
+    }
+
+    public DeepSeekClient(
+            AppConfig config,
+            HttpClient httpClient,
+            ObjectMapper objectMapper,
+            SseEventReader eventReader,
+            HttpErrorMapper errorMapper,
+            PromptAssembler prompts) {
         this.config = Objects.requireNonNull(config, "config");
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.eventReader = Objects.requireNonNull(eventReader, "eventReader");
         this.errorMapper = Objects.requireNonNull(errorMapper, "errorMapper");
-        this.tools = Objects.requireNonNull(tools, "tools");
+        this.prompts = Objects.requireNonNull(prompts, "prompts");
         this.resultJson = new ToolResultJson(objectMapper, new SecretRedactor(config.apiKey()));
     }
 
@@ -147,26 +166,25 @@ public final class DeepSeekClient implements LlmClient {
     }
 
     private HttpRequest buildRequest(ChatRequest request) throws LlmException {
+        ApiPayload payload = prompts.assembleApiPayload(request);
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", config.model());
         root.put("stream", true);
         root.put("max_tokens",
-                request.outputTokenLimit().orElse(config.maxOutputTokens()));
+                payload.outputTokenLimit().orElse(config.maxOutputTokens()));
         if (config.thinking().enabled()) {
             root.putObject("thinking").put("type", "enabled");
             root.put("reasoning_effort", config.thinking().effort().apiValue());
         }
         ArrayNode messages = root.putArray("messages");
-        for (var reminder : request.reminders()) {
-            messages.addObject()
-                    .put("role", "system")
-                    .put("content", "<system-reminder>\n" + reminder.content() + "\n</system-reminder>");
-        }
-        for (ChatMessage message : request.messages()) {
+        messages.addObject()
+                .put("role", "system")
+                .put("content", payload.systemPrompt());
+        for (ChatMessage message : payload.messages()) {
             appendMessage(messages, message);
         }
         ArrayNode definitions = root.putArray("tools");
-        tools.exportEnabled(request.toolSelection(), this::encodeDefinition).forEach(definitions::add);
+        payload.tools().stream().map(this::encodeDefinition).forEach(definitions::add);
         try {
             return HttpRequest.newBuilder(endpoint("/chat/completions"))
                     .timeout(config.requestTimeout())
@@ -366,9 +384,13 @@ public final class DeepSeekClient implements LlmClient {
         if (details.path("reasoning_tokens").canConvertToLong()) {
             usage.reasoning(details.path("reasoning_tokens").longValue());
         }
-        JsonNode promptDetails = node.path("prompt_tokens_details");
-        if (promptDetails.path("cached_tokens").canConvertToLong()) {
-            usage.cacheRead(promptDetails.path("cached_tokens").longValue());
+        if (node.path("prompt_cache_hit_tokens").canConvertToLong()) {
+            usage.cacheRead(node.path("prompt_cache_hit_tokens").longValue());
+        } else {
+            JsonNode promptDetails = node.path("prompt_tokens_details");
+            if (promptDetails.path("cached_tokens").canConvertToLong()) {
+                usage.cacheRead(promptDetails.path("cached_tokens").longValue());
+            }
         }
     }
 

@@ -65,6 +65,11 @@ public final class ReadFileTool extends BaseTool {
         properties.putObject("end_line").put("type", "integer").put("minimum", 1);
         schema.putArray("required").add("path");
         schema.put("additionalProperties", false);
-        return new ToolDefinition("read_file", "读取工作区内的 UTF-8 文本文件", schema, ToolRisk.LOW);
+        return new ToolDefinition(
+                "read_file",
+                "读取工作区内 UTF-8 文本文件的全部或指定行范围。修改文件前应先读取；"
+                        + "通常先用 glob/grep 定位目标，再用本工具查看完整上下文。",
+                schema,
+                ToolRisk.LOW);
     }
 }

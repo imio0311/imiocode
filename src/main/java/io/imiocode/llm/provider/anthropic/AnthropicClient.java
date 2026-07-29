@@ -27,6 +27,10 @@ import io.imiocode.llm.ToolResultJson;
 import io.imiocode.llm.transport.HttpErrorMapper;
 import io.imiocode.llm.transport.SseEvent;
 import io.imiocode.llm.transport.SseEventReader;
+import io.imiocode.prompt.ApiPayload;
+import io.imiocode.prompt.CacheDirective;
+import io.imiocode.prompt.PromptAssembler;
+import io.imiocode.prompt.SystemPromptBuilder;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolDefinition;
@@ -58,7 +62,7 @@ public final class AnthropicClient implements LlmClient {
     private final ObjectMapper objectMapper;
     private final SseEventReader eventReader;
     private final HttpErrorMapper errorMapper;
-    private final ToolRegistry tools;
+    private final PromptAssembler prompts;
     private final ToolResultJson resultJson;
     private final AnthropicThinkingModeResolver thinkingModeResolver = new AnthropicThinkingModeResolver();
     private final AtomicReference<CompletableFuture<HttpResponse<InputStream>>> activeRequest = new AtomicReference<>();
@@ -81,12 +85,28 @@ public final class AnthropicClient implements LlmClient {
             SseEventReader eventReader,
             HttpErrorMapper errorMapper,
             ToolRegistry tools) {
+        this(
+                config,
+                httpClient,
+                objectMapper,
+                eventReader,
+                errorMapper,
+                new PromptAssembler(SystemPromptBuilder.defaults(), tools));
+    }
+
+    public AnthropicClient(
+            AppConfig config,
+            HttpClient httpClient,
+            ObjectMapper objectMapper,
+            SseEventReader eventReader,
+            HttpErrorMapper errorMapper,
+            PromptAssembler prompts) {
         this.config = Objects.requireNonNull(config, "config");
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.eventReader = Objects.requireNonNull(eventReader, "eventReader");
         this.errorMapper = Objects.requireNonNull(errorMapper, "errorMapper");
-        this.tools = Objects.requireNonNull(tools, "tools");
+        this.prompts = Objects.requireNonNull(prompts, "prompts");
         this.resultJson = new ToolResultJson(objectMapper, new SecretRedactor(config.apiKey()));
     }
 
@@ -153,11 +173,12 @@ public final class AnthropicClient implements LlmClient {
     }
 
     private HttpRequest buildRequest(ChatRequest request) throws LlmException {
+        ApiPayload payload = prompts.assembleApiPayload(request);
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", config.model());
         root.put("stream", true);
         root.put("max_tokens",
-                request.outputTokenLimit().orElse(config.maxOutputTokens()));
+                payload.outputTokenLimit().orElse(config.maxOutputTokens()));
         if (config.thinking().enabled()) {
             ThinkingMode mode = thinkingModeResolver.resolve(config);
             ObjectNode thinking = root.putObject("thinking");
@@ -169,53 +190,37 @@ public final class AnthropicClient implements LlmClient {
                 thinking.put("budget_tokens", config.thinking().budgetTokens());
             }
         }
-        if (!request.reminders().isEmpty()) {
-            ArrayNode system = root.putArray("system");
-            request.reminders().forEach(reminder -> system.addObject()
-                    .put("type", "text")
-                    .put("text", "<system-reminder>\n" + reminder.content() + "\n</system-reminder>"));
+        ObjectNode systemBlock = root.putArray("system")
+                .addObject()
+                .put("type", "text")
+                .put("text", payload.systemPrompt());
+        if (payload.cacheIntent().system() == CacheDirective.EPHEMERAL) {
+            addEphemeralCacheControl(systemBlock);
         }
         ArrayNode messages = root.putArray("messages");
-        for (ChatMessage message : request.messages()) {
-            ObjectNode item = messages.addObject();
-            item.put("role", message.role() == MessageRole.TOOL ? "user" : message.role().apiValue());
-            ArrayNode content = item.putArray("content");
-            for (MessagePart part : message.parts()) {
-                if (part instanceof TextPart text) {
-                    content.addObject().put("type", "text").put("text", text.text());
-                } else if (part instanceof ThinkingPart thinkingPart) {
-                    if (!(thinkingPart.metadata() instanceof AnthropicThinkingMetadata metadata)) {
-                        throw protocolError("Anthropic 历史包含不兼容的 Thinking 元数据", null);
-                    }
-                    ObjectNode block = content.addObject();
-                    if (!metadata.redactedData().isBlank()) {
-                        block.put("type", "redacted_thinking");
-                        block.put("data", metadata.redactedData());
-                    } else {
-                        block.put("type", "thinking");
-                        block.put("thinking", thinkingPart.text());
-                        block.put("signature", metadata.signature());
-                    }
-                } else if (part instanceof ToolCallPart callPart) {
-                    ToolCall call = callPart.call();
-                    ObjectNode block = content.addObject();
-                    block.put("type", "tool_use");
-                    block.put("id", call.id());
-                    block.put("name", call.name());
-                    block.set("input", call.arguments());
-                } else if (part instanceof ToolResultPart resultPart) {
-                    ObjectNode block = content.addObject();
-                    block.put("type", "tool_result");
-                    block.put("tool_use_id", resultPart.callId());
-                    block.put("content", resultJson.encodeString(resultPart.result()));
-                    if (!resultPart.result().success()) {
-                        block.put("is_error", true);
-                    }
-                }
+        String previousRole = null;
+        ArrayNode currentContent = null;
+        for (ChatMessage message : payload.messages()) {
+            String role = message.role() == MessageRole.TOOL
+                    ? "user"
+                    : message.role().apiValue();
+            if (!role.equals(previousRole)) {
+                ObjectNode item = messages.addObject();
+                item.put("role", role);
+                currentContent = item.putArray("content");
+                previousRole = role;
             }
+            appendContent(currentContent, message);
         }
         ArrayNode definitions = root.putArray("tools");
-        tools.exportEnabled(request.toolSelection(), this::encodeDefinition).forEach(definitions::add);
+        for (int index = 0; index < payload.tools().size(); index++) {
+            ObjectNode definition = encodeDefinition(payload.tools().get(index));
+            if (index == payload.tools().size() - 1
+                    && payload.cacheIntent().tools() == CacheDirective.EPHEMERAL) {
+                addEphemeralCacheControl(definition);
+            }
+            definitions.add(definition);
+        }
         try {
             return HttpRequest.newBuilder(endpoint("/v1/messages"))
                     .timeout(config.requestTimeout())
@@ -413,6 +418,47 @@ public final class AnthropicClient implements LlmClient {
                 // 关闭过程无需覆盖原始退出原因。
             }
         }
+    }
+
+    private void appendContent(ArrayNode content, ChatMessage message)
+            throws LlmException {
+        for (MessagePart part : message.parts()) {
+            if (part instanceof TextPart text) {
+                content.addObject().put("type", "text").put("text", text.text());
+            } else if (part instanceof ThinkingPart thinkingPart) {
+                if (!(thinkingPart.metadata() instanceof AnthropicThinkingMetadata metadata)) {
+                    throw protocolError("Anthropic 历史包含不兼容的 Thinking 元数据", null);
+                }
+                ObjectNode block = content.addObject();
+                if (!metadata.redactedData().isBlank()) {
+                    block.put("type", "redacted_thinking");
+                    block.put("data", metadata.redactedData());
+                } else {
+                    block.put("type", "thinking");
+                    block.put("thinking", thinkingPart.text());
+                    block.put("signature", metadata.signature());
+                }
+            } else if (part instanceof ToolCallPart callPart) {
+                ToolCall call = callPart.call();
+                ObjectNode block = content.addObject();
+                block.put("type", "tool_use");
+                block.put("id", call.id());
+                block.put("name", call.name());
+                block.set("input", call.arguments());
+            } else if (part instanceof ToolResultPart resultPart) {
+                ObjectNode block = content.addObject();
+                block.put("type", "tool_result");
+                block.put("tool_use_id", resultPart.callId());
+                block.put("content", resultJson.encodeString(resultPart.result()));
+                if (!resultPart.result().success()) {
+                    block.put("is_error", true);
+                }
+            }
+        }
+    }
+
+    private static void addEphemeralCacheControl(ObjectNode node) {
+        node.putObject("cache_control").put("type", "ephemeral");
     }
 
     @Override

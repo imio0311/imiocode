@@ -8,6 +8,8 @@ import io.imiocode.llm.provider.openai.OpenAiClient;
 import io.imiocode.llm.transport.HttpClientFactory;
 import io.imiocode.llm.transport.HttpErrorMapper;
 import io.imiocode.llm.transport.SseEventReader;
+import io.imiocode.prompt.PromptAssembler;
+import io.imiocode.prompt.SystemPromptBuilder;
 import io.imiocode.tool.ToolRegistry;
 
 import java.net.http.HttpClient;
@@ -22,10 +24,16 @@ public final class LlmClientFactory {
         ObjectMapper objectMapper = new ObjectMapper();
         SseEventReader eventReader = new SseEventReader();
         HttpErrorMapper errorMapper = new HttpErrorMapper();
+        PromptAssembler prompts = new PromptAssembler(
+                SystemPromptBuilder.defaults(),
+                tools);
         return switch (config.provider()) {
-            case OPENAI -> new OpenAiClient(config, httpClient, objectMapper, eventReader, errorMapper, tools);
-            case ANTHROPIC -> new AnthropicClient(config, httpClient, objectMapper, eventReader, errorMapper, tools);
-            case DEEPSEEK -> new DeepSeekClient(config, httpClient, objectMapper, eventReader, errorMapper, tools);
+            case OPENAI -> new OpenAiClient(
+                    config, httpClient, objectMapper, eventReader, errorMapper, prompts);
+            case ANTHROPIC -> new AnthropicClient(
+                    config, httpClient, objectMapper, eventReader, errorMapper, prompts);
+            case DEEPSEEK -> new DeepSeekClient(
+                    config, httpClient, objectMapper, eventReader, errorMapper, prompts);
         };
     }
 }

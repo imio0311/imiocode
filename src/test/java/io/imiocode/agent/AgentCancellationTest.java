@@ -10,10 +10,18 @@ import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmEvent;
 import io.imiocode.llm.LlmEventListener;
 import io.imiocode.llm.LlmException;
+import io.imiocode.prompt.EnvironmentContext;
+import io.imiocode.prompt.EnvironmentReminderFormatter;
+import io.imiocode.prompt.GitContext;
+import io.imiocode.prompt.GitWorkingTreeState;
 import io.imiocode.tool.ToolRegistry;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
 import java.time.Duration;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -53,7 +61,10 @@ class AgentCancellationTest {
         try (Agent agent = new Agent(
                 client,
                 new ToolRegistry(),
-                new AgentConfig(3, Duration.ofMillis(80), 2)
+                new AgentConfig(3, Duration.ofMillis(80), 2),
+                8_192,
+                AgentCancellationTest::environment,
+                new EnvironmentReminderFormatter()
         )) {
             timedOut = agent.run(request("等待超时"), AgentEventListener.NOOP);
             next = agent.run(request("下一任务"), AgentEventListener.NOOP);
@@ -66,6 +77,16 @@ class AgentCancellationTest {
 
     private static AgentRequest request(String text) {
         return new AgentRequest(new ChatMessage(MessageRole.USER, text));
+    }
+
+    private static EnvironmentContext environment() {
+        return new EnvironmentContext(
+                Path.of("D:/workspace"),
+                "Windows",
+                "PowerShell",
+                ZonedDateTime.of(2026, 7, 29, 10, 0, 0, 0,
+                        ZoneId.of("Asia/Shanghai")),
+                new GitContext(Optional.of("test"), GitWorkingTreeState.CLEAN));
     }
 
     private static final class BlockingThenSuccessClient implements LlmClient {

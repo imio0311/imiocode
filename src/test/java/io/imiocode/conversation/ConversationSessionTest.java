@@ -104,12 +104,20 @@ class ConversationSessionTest {
         session.sendWithEvents("读取", text -> { });
         session.sendWithEvents("继续", text -> { });
 
-        assertEquals(List.of(new SystemReminder("仅本轮生效")), client.requests.get(0).reminders());
-        assertEquals(client.requests.get(0).reminders(), client.requests.get(1).reminders());
-        assertEquals(List.of(), client.requests.get(2).reminders());
+        assertEquals(List.of(new SystemReminder("仅本轮生效")),
+                sessionReminders(client.requests.get(0)));
+        assertEquals(sessionReminders(client.requests.get(0)),
+                sessionReminders(client.requests.get(1)));
+        assertEquals(List.of(), sessionReminders(client.requests.get(2)));
         assertFalse(session.historySnapshot().stream()
                 .map(ChatMessage::content)
                 .anyMatch(content -> content.contains("仅本轮生效")));
+    }
+
+    private static List<SystemReminder> sessionReminders(ChatRequest request) {
+        return request.reminders().stream()
+                .filter(reminder -> reminder.scope() == ReminderScope.SESSION)
+                .toList();
     }
 
     @Test

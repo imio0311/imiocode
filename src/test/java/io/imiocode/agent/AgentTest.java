@@ -7,11 +7,16 @@ import io.imiocode.conversation.ChatMessage;
 import io.imiocode.conversation.ChatRequest;
 import io.imiocode.conversation.ChatResponse;
 import io.imiocode.conversation.MessageRole;
+import io.imiocode.conversation.ReminderScope;
 import io.imiocode.conversation.ToolCallPart;
 import io.imiocode.conversation.ToolResultPart;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmEvent;
 import io.imiocode.llm.LlmEventListener;
+import io.imiocode.prompt.EnvironmentContext;
+import io.imiocode.prompt.EnvironmentReminderFormatter;
+import io.imiocode.prompt.GitContext;
+import io.imiocode.prompt.GitWorkingTreeState;
 import io.imiocode.tool.Tool;
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolDefinition;
@@ -20,9 +25,13 @@ import io.imiocode.tool.ToolResult;
 import io.imiocode.tool.ToolRisk;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
 import java.time.Duration;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -30,6 +39,55 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTest {
+    @Test
+    void capturesEnvironmentOncePerTaskAndReusesReminderAcrossIterations() {
+        AtomicInteger captures = new AtomicInteger();
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(tool("read_file", ToolRisk.LOW, new AtomicInteger()));
+        SequencedClient client = new SequencedClient(List.of(
+                toolResponse(call("c1", "read_file")),
+                new ChatResponse("完成")));
+
+        try (Agent agent = new Agent(
+                client,
+                registry,
+                config(3),
+                8_192,
+                () -> environment(captures.incrementAndGet()),
+                new EnvironmentReminderFormatter())) {
+            agent.run(request("读取"), AgentEventListener.NOOP);
+        }
+
+        assertEquals(1, captures.get());
+        assertEquals(2, client.requests.size());
+        String first = environmentReminder(client.requests.get(0));
+        String second = environmentReminder(client.requests.get(1));
+        assertEquals(first, second);
+    }
+
+    @Test
+    void refreshesEnvironmentForNextUserTask() {
+        AtomicInteger captures = new AtomicInteger();
+        SequencedClient client = new SequencedClient(List.of(
+                new ChatResponse("第一次"),
+                new ChatResponse("第二次")));
+
+        try (Agent agent = new Agent(
+                client,
+                new ToolRegistry(),
+                config(3),
+                8_192,
+                () -> environment(captures.incrementAndGet()),
+                new EnvironmentReminderFormatter())) {
+            agent.run(request("任务一"), AgentEventListener.NOOP);
+            agent.run(request("任务二"), AgentEventListener.NOOP);
+        }
+
+        assertEquals(2, captures.get());
+        assertFalse(environmentReminder(client.requests.get(0))
+                .equals(environmentReminder(client.requests.get(1))));
+    }
+
     @Test
     void completesSingleTextResponse() {
         SequencedClient client = new SequencedClient(List.of(new ChatResponse("最终回答")));
@@ -168,6 +226,26 @@ class AgentTest {
 
     private static AgentConfig config(int maxIterations) {
         return new AgentConfig(maxIterations, Duration.ofSeconds(5), 2);
+    }
+
+    private static EnvironmentContext environment(int sequence) {
+        return new EnvironmentContext(
+                Path.of("D:/workspace"),
+                "Windows",
+                "PowerShell",
+                ZonedDateTime.of(2026, 7, 29, 10, sequence, 0, 0,
+                        ZoneId.of("Asia/Shanghai")),
+                new GitContext(
+                        Optional.of("ch5"),
+                        GitWorkingTreeState.CLEAN));
+    }
+
+    private static String environmentReminder(ChatRequest request) {
+        return request.reminders().stream()
+                .filter(reminder -> reminder.scope() == ReminderScope.ENVIRONMENT)
+                .findFirst()
+                .orElseThrow()
+                .content();
     }
 
     private static AgentRequest request(String text) {

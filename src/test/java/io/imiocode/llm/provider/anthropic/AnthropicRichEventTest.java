@@ -41,7 +41,7 @@ class AnthropicRichEventTest {
         try (MockLlmServer server = new MockLlmServer()) {
             server.enqueueSse("""
                     event: message_start
-                    data: {"type":"message_start","message":{"usage":{"input_tokens":12,"cache_read_input_tokens":3}}}
+                    data: {"type":"message_start","message":{"usage":{"input_tokens":12,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}}}
 
                     event: content_block_start
                     data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}
@@ -83,12 +83,18 @@ class AnthropicRichEventTest {
             assertEquals(7, response.usage().outputTokens().orElseThrow());
             assertEquals(2, response.usage().reasoningTokens().orElseThrow());
             assertEquals(3, response.usage().cacheReadTokens().orElseThrow());
+            assertEquals(4, response.usage().cacheWriteTokens().orElseThrow());
             assertTrue(events.stream().anyMatch(LlmEvent.ThinkingDelta.class::isInstance));
             assertTrue(events.stream().anyMatch(LlmEvent.ThinkingCompleted.class::isInstance));
             assertInstanceOf(LlmEvent.StreamCompleted.class, events.getLast());
             assertEquals("adaptive", body.path("thinking").path("type").asText());
             assertEquals("high", body.path("output_config").path("effort").asText());
-            assertTrue(body.path("system").get(0).path("text").asText().contains("仅本轮生效"));
+            assertTrue(body.path("system").get(0).path("text").asText()
+                    .startsWith("## 身份"));
+            assertEquals("ephemeral",
+                    body.path("system").get(0).path("cache_control").path("type").asText());
+            assertTrue(body.path("messages").get(0).path("content").get(0)
+                    .path("text").asText().contains("仅本轮生效"));
         }
     }
 

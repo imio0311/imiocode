@@ -30,6 +30,7 @@ import java.util.OptionalInt;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AnthropicClientTest {
     @Test
@@ -134,7 +135,10 @@ class AnthropicClientTest {
 
             assertEquals(List.of("c1", "c2"), response.toolCalls().stream().map(ToolCall::id).toList());
             assertEquals("正在处理", response.text());
-            assertEquals(1, body.path("tools").size());
+            assertEquals(2, body.path("tools").size());
+            assertTrue(body.path("tools").get(0).path("cache_control").isMissingNode());
+            assertEquals("ephemeral",
+                    body.path("tools").get(1).path("cache_control").path("type").asText());
             assertEquals("tool_use", body.path("messages").get(1).path("content").get(0).path("type").asText());
             assertEquals("tool_result", body.path("messages").get(2).path("content").get(0).path("type").asText());
             assertEquals("user", body.path("messages").get(2).path("role").asText());
@@ -189,7 +193,6 @@ class AnthropicClientTest {
         ToolRegistry registry = new ToolRegistry();
         registry.register(stub("read_file"));
         registry.register(stub("write_file"));
-        registry.disable("write_file");
         return registry;
     }
 

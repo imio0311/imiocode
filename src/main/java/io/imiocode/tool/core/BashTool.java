@@ -142,7 +142,12 @@ public final class BashTool extends BaseTool implements AutoCloseable {
                 .put("description", "交给平台 Shell 执行的命令");
         schema.putArray("required").add("command");
         schema.put("additionalProperties", false);
-        return new ToolDefinition("bash", "在工作区中执行 Shell 命令", schema, ToolRisk.HIGH);
+        return new ToolDefinition(
+                "bash",
+                "在工作区中执行构建、测试或专用工具无法完成的 Shell 命令。"
+                        + "不要用它替代 glob、grep、read_file 或 edit_file；执行后根据退出码和输出判断结果。",
+                schema,
+                ToolRisk.HIGH);
     }
 
     private static final class BoundedCapture {

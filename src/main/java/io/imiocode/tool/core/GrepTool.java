@@ -105,6 +105,11 @@ public final class GrepTool extends BaseTool {
         properties.putObject("path").put("type", "string").put("description", "可选文件或目录");
         schema.putArray("required").add("pattern");
         schema.put("additionalProperties", false);
-        return new ToolDefinition("grep", "在工作区文本文件中搜索正则表达式", schema, ToolRisk.LOW);
+        return new ToolDefinition(
+                "grep",
+                "用正则表达式搜索工作区文本内容，适合定位符号、调用点和配置。"
+                        + "先用 glob 缩小文件范围，命中后用 read_file 查看周边上下文。",
+                schema,
+                ToolRisk.LOW);
     }
 }

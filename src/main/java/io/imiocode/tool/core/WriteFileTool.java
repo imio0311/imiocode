@@ -47,6 +47,11 @@ public final class WriteFileTool extends BaseTool {
         properties.putObject("content").put("type", "string").put("description", "完整 UTF-8 文件内容");
         schema.putArray("required").add("path").add("content");
         schema.put("additionalProperties", false);
-        return new ToolDefinition("write_file", "创建或完整覆盖工作区内的文件", schema, ToolRisk.MEDIUM);
+        return new ToolDefinition(
+                "write_file",
+                "创建新文件或完整覆盖工作区内的文件。已有文件的局部修改优先使用 edit_file；"
+                        + "覆盖前必须确认已经读取并理解现有内容。",
+                schema,
+                ToolRisk.MEDIUM);
     }
 }

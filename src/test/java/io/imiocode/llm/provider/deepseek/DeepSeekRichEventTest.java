@@ -34,6 +34,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DeepSeekRichEventTest {
     @Test
+    void keepsCompatibilityWithLegacyCachedTokensField() throws Exception {
+        try (MockLlmServer server = new MockLlmServer()) {
+            server.enqueueSse("""
+                    data: {"choices":[{"delta":{"content":"完成"},"finish_reason":"stop"}]}
+
+                    data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":7}}}
+
+                    data: [DONE]
+
+                    """);
+
+            var response = client(server).streamChat(
+                    new ChatRequest(List.of(
+                            new ChatMessage(MessageRole.USER, "测试兼容字段"))),
+                    (LlmEventListener) event -> { });
+
+            assertEquals(7, response.usage().cacheReadTokens().orElseThrow());
+        }
+    }
+
+    @Test
     void mapsReasoningContentUsageAndReminder() throws Exception {
         try (MockLlmServer server = new MockLlmServer()) {
             server.enqueueSse("""
@@ -41,7 +62,7 @@ class DeepSeekRichEventTest {
 
                     data: {"choices":[{"delta":{"content":"答案"},"finish_reason":"stop"}]}
 
-                    data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":6,"prompt_tokens_details":{"cached_tokens":1},"completion_tokens_details":{"reasoning_tokens":2}}}
+                    data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":6,"prompt_cache_hit_tokens":1,"prompt_tokens_details":{"cached_tokens":99},"completion_tokens_details":{"reasoning_tokens":2}}}
 
                     data: [DONE]
 
@@ -65,8 +86,15 @@ class DeepSeekRichEventTest {
             assertInstanceOf(LlmEvent.StreamCompleted.class, events.getLast());
             assertEquals("enabled", body.path("thinking").path("type").asText());
             assertEquals("medium", body.path("reasoning_effort").asText());
+            assertEquals(3, body.path("messages").size());
             assertEquals("system", body.path("messages").get(0).path("role").asText());
-            assertTrue(body.path("messages").get(0).path("content").asText().contains("仅本轮生效"));
+            assertEquals("user", body.path("messages").get(1).path("role").asText());
+            assertEquals("user", body.path("messages").get(2).path("role").asText());
+            assertTrue(body.path("messages").get(0).path("content").asText()
+                    .startsWith("## 身份"));
+            assertTrue(body.path("messages").get(1).path("content").asText()
+                    .contains("仅本轮生效"));
+            assertTrue(!body.toString().contains("cache_control"));
         }
     }
 
@@ -93,9 +121,9 @@ class DeepSeekRichEventTest {
                     .readTree(server.takeRequest().body())
                     .path("messages");
 
-            assertEquals("assistant", messages.get(1).path("role").asText());
-            assertEquals("旧回答", messages.get(1).path("content").asText());
-            assertEquals("分析", messages.get(1).path("reasoning_content").asText());
+            assertEquals("assistant", messages.get(2).path("role").asText());
+            assertEquals("旧回答", messages.get(2).path("content").asText());
+            assertEquals("分析", messages.get(2).path("reasoning_content").asText());
         }
     }
 

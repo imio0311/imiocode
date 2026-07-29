@@ -73,6 +73,11 @@ public final class EditFileTool extends BaseTool {
         properties.putObject("new_text").put("type", "string");
         schema.putArray("required").add("path").add("old_text").add("new_text");
         schema.put("additionalProperties", false);
-        return new ToolDefinition("edit_file", "精确替换文件中唯一出现的文本", schema, ToolRisk.MEDIUM);
+        return new ToolDefinition(
+                "edit_file",
+                "对工作区文件执行一次精确文本替换，旧文本必须唯一匹配。"
+                        + "调用前先用 read_file 读取上下文，并提供原样、完整的旧文本。",
+                schema,
+                ToolRisk.MEDIUM);
     }
 }

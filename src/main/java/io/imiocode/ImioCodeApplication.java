@@ -8,6 +8,8 @@ import io.imiocode.conversation.ConversationLoop;
 import io.imiocode.conversation.ConversationSession;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmClientFactory;
+import io.imiocode.prompt.EnvironmentContextCollector;
+import io.imiocode.prompt.EnvironmentReminderFormatter;
 import io.imiocode.terminal.JLineTerminalUi;
 import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiContext;
@@ -25,6 +27,8 @@ import io.imiocode.tool.workspace.WorkspacePolicy;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
 
 public final class ImioCodeApplication {
     private ImioCodeApplication() {
@@ -60,7 +64,12 @@ public final class ImioCodeApplication {
                     client,
                     registry,
                     config.agent(),
-                    config.maxOutputTokens());
+                    config.maxOutputTokens(),
+                    new EnvironmentContextCollector(
+                            workspace,
+                            Clock.systemDefaultZone(),
+                            Duration.ofSeconds(2)),
+                    new EnvironmentReminderFormatter());
             session = new ConversationSession(agent);
             terminal = new JLineTerminalUi(redactor);
             terminal.showWelcome(new UiContext(

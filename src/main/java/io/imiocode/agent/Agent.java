@@ -10,10 +10,16 @@ import io.imiocode.conversation.SystemReminder;
 import io.imiocode.conversation.ToolResultPart;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmException;
+import io.imiocode.prompt.EnvironmentContextCollector;
+import io.imiocode.prompt.EnvironmentContextProvider;
+import io.imiocode.prompt.EnvironmentReminderFormatter;
 import io.imiocode.tool.ToolExecution;
 import io.imiocode.tool.ToolRegistry;
 import io.imiocode.tool.ToolSelection;
 
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -35,6 +41,8 @@ public final class Agent implements AutoCloseable {
     private final AgentConfig config;
     private final StreamingTurnExecutor turnExecutor;
     private final int initialOutputTokenLimit;
+    private final EnvironmentContextProvider environmentContextProvider;
+    private final EnvironmentReminderFormatter environmentReminderFormatter;
     private final AtomicReference<AgentMode> mode = new AtomicReference<>(AgentMode.DO);
     private final AtomicReference<AgentTaskContext> activeTask = new AtomicReference<>();
     private final ScheduledExecutorService watchdog =
@@ -52,9 +60,35 @@ public final class Agent implements AutoCloseable {
             AgentConfig config,
             int initialOutputTokenLimit
     ) {
+        this(
+                client,
+                registry,
+                config,
+                initialOutputTokenLimit,
+                new EnvironmentContextCollector(
+                        Path.of("").toAbsolutePath(),
+                        Clock.systemDefaultZone(),
+                        Duration.ofSeconds(2)),
+                new EnvironmentReminderFormatter());
+    }
+
+    public Agent(
+            LlmClient client,
+            ToolRegistry registry,
+            AgentConfig config,
+            int initialOutputTokenLimit,
+            EnvironmentContextProvider environmentContextProvider,
+            EnvironmentReminderFormatter environmentReminderFormatter
+    ) {
         this.client = Objects.requireNonNull(client, "client 不能为空");
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
         this.config = Objects.requireNonNull(config, "config 不能为空");
+        this.environmentContextProvider = Objects.requireNonNull(
+                environmentContextProvider,
+                "环境上下文提供器不能为空");
+        this.environmentReminderFormatter = Objects.requireNonNull(
+                environmentReminderFormatter,
+                "环境提醒格式化器不能为空");
         if (initialOutputTokenLimit <= 0) {
             throw new IllegalArgumentException("initialOutputTokenLimit 必须为正数");
         }
@@ -91,7 +125,9 @@ public final class Agent implements AutoCloseable {
 
         AgentMode taskMode = mode.get();
         ToolSelection selection = PlanModePrompt.toolSelection(taskMode);
-        List<SystemReminder> reminders = combineReminders(request.reminders(), taskMode);
+        SystemReminder environmentReminder = environmentReminderFormatter.format(
+                environmentContextProvider.capture());
+        List<SystemReminder> sessionReminders = List.copyOf(request.reminders());
         List<ChatMessage> trajectory = new ArrayList<>();
         trajectory.add(request.userMessage());
         int iterations = 0;
@@ -119,6 +155,11 @@ public final class Agent implements AutoCloseable {
                 }
 
                 checkedListener.onEvent(new AgentEvent.IterationStarted(iteration));
+                List<SystemReminder> reminders = remindersForIteration(
+                        environmentReminder,
+                        sessionReminders,
+                        taskMode,
+                        iteration);
                 StreamingTurnResult turn = turnExecutor.execute(
                         new ChatRequest(
                                 requestMessages(request.committedHistory(), trajectory),
@@ -219,12 +260,16 @@ public final class Agent implements AutoCloseable {
         }
     }
 
-    private static List<SystemReminder> combineReminders(
-            List<SystemReminder> requestReminders,
-            AgentMode mode
+    private static List<SystemReminder> remindersForIteration(
+            SystemReminder environmentReminder,
+            List<SystemReminder> sessionReminders,
+            AgentMode mode,
+            int iteration
     ) {
-        List<SystemReminder> combined = new ArrayList<>(requestReminders);
-        combined.addAll(PlanModePrompt.additionalReminders(mode));
+        List<SystemReminder> combined = new ArrayList<>(sessionReminders.size() + 2);
+        combined.add(environmentReminder);
+        combined.addAll(sessionReminders);
+        PlanModePrompt.reminder(mode, iteration).ifPresent(combined::add);
         return List.copyOf(combined);
     }
 

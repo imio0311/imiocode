@@ -119,10 +119,11 @@ class DeepSeekClientTest {
             assertEquals("正在处理", response.text());
             assertEquals(1, body.path("tools").size());
             assertEquals("read_file", body.path("tools").get(0).path("function").path("name").asText());
-            assertEquals("assistant", body.path("messages").get(1).path("role").asText());
-            assertEquals("c1", body.path("messages").get(1).path("tool_calls").get(0).path("id").asText());
-            assertEquals("tool", body.path("messages").get(2).path("role").asText());
-            assertEquals("c1", body.path("messages").get(2).path("tool_call_id").asText());
+            assertEquals("system", body.path("messages").get(0).path("role").asText());
+            assertEquals("assistant", body.path("messages").get(2).path("role").asText());
+            assertEquals("c1", body.path("messages").get(2).path("tool_calls").get(0).path("id").asText());
+            assertEquals("tool", body.path("messages").get(3).path("role").asText());
+            assertEquals("c1", body.path("messages").get(3).path("tool_call_id").asText());
         }
     }
 

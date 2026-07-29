@@ -26,6 +26,9 @@ import io.imiocode.llm.ToolResultJson;
 import io.imiocode.llm.transport.HttpErrorMapper;
 import io.imiocode.llm.transport.SseEvent;
 import io.imiocode.llm.transport.SseEventReader;
+import io.imiocode.prompt.ApiPayload;
+import io.imiocode.prompt.PromptAssembler;
+import io.imiocode.prompt.SystemPromptBuilder;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolDefinition;
@@ -56,7 +59,7 @@ public final class OpenAiClient implements LlmClient {
     private final ObjectMapper objectMapper;
     private final SseEventReader eventReader;
     private final HttpErrorMapper errorMapper;
-    private final ToolRegistry tools;
+    private final PromptAssembler prompts;
     private final ToolResultJson resultJson;
     private final AtomicReference<CompletableFuture<HttpResponse<InputStream>>> activeRequest = new AtomicReference<>();
     private final AtomicReference<InputStream> activeStream = new AtomicReference<>();
@@ -78,12 +81,28 @@ public final class OpenAiClient implements LlmClient {
             SseEventReader eventReader,
             HttpErrorMapper errorMapper,
             ToolRegistry tools) {
+        this(
+                config,
+                httpClient,
+                objectMapper,
+                eventReader,
+                errorMapper,
+                new PromptAssembler(SystemPromptBuilder.defaults(), tools));
+    }
+
+    public OpenAiClient(
+            AppConfig config,
+            HttpClient httpClient,
+            ObjectMapper objectMapper,
+            SseEventReader eventReader,
+            HttpErrorMapper errorMapper,
+            PromptAssembler prompts) {
         this.config = Objects.requireNonNull(config, "config");
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.eventReader = Objects.requireNonNull(eventReader, "eventReader");
         this.errorMapper = Objects.requireNonNull(errorMapper, "errorMapper");
-        this.tools = Objects.requireNonNull(tools, "tools");
+        this.prompts = Objects.requireNonNull(prompts, "prompts");
         this.resultJson = new ToolResultJson(objectMapper, new SecretRedactor(config.apiKey()));
     }
 
@@ -152,29 +171,25 @@ public final class OpenAiClient implements LlmClient {
     }
 
     private HttpRequest buildRequest(ChatRequest request) throws LlmException {
+        ApiPayload payload = prompts.assembleApiPayload(request);
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", config.model());
         root.put("stream", true);
         root.put("max_output_tokens",
-                request.outputTokenLimit().orElse(config.maxOutputTokens()));
+                payload.outputTokenLimit().orElse(config.maxOutputTokens()));
         if (config.thinking().enabled()) {
             ObjectNode reasoning = root.putObject("reasoning");
             reasoning.put("effort", config.thinking().effort().apiValue());
             reasoning.put("summary", config.thinking().summary().apiValue());
             root.putArray("include").add("reasoning.encrypted_content");
         }
-        if (!request.reminders().isEmpty()) {
-            String instructions = request.reminders().stream()
-                    .map(reminder -> "<system-reminder>\n" + reminder.content() + "\n</system-reminder>")
-                    .collect(java.util.stream.Collectors.joining("\n\n"));
-            root.put("instructions", instructions);
-        }
+        root.put("instructions", payload.systemPrompt());
         ArrayNode input = root.putArray("input");
-        for (ChatMessage message : request.messages()) {
+        for (ChatMessage message : payload.messages()) {
             appendMessage(input, message);
         }
         ArrayNode definitions = root.putArray("tools");
-        tools.exportEnabled(request.toolSelection(), this::encodeDefinition).forEach(definitions::add);
+        payload.tools().stream().map(this::encodeDefinition).forEach(definitions::add);
         try {
             return HttpRequest.newBuilder(endpoint("/v1/responses"))
                     .timeout(config.requestTimeout())
@@ -347,6 +362,9 @@ public final class OpenAiClient implements LlmClient {
         }
         if (node.path("input_tokens_details").path("cached_tokens").canConvertToLong()) {
             usage.cacheRead(node.path("input_tokens_details").path("cached_tokens").longValue());
+        }
+        if (node.path("input_tokens_details").path("cache_write_tokens").canConvertToLong()) {
+            usage.cacheWrite(node.path("input_tokens_details").path("cache_write_tokens").longValue());
         }
         if (node.path("output_tokens_details").path("reasoning_tokens").canConvertToLong()) {
             usage.reasoning(node.path("output_tokens_details").path("reasoning_tokens").longValue());

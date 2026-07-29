@@ -63,6 +63,11 @@ public final class GlobTool extends BaseTool {
                 .put("description", "使用 / 分隔的 Glob 模式");
         schema.putArray("required").add("pattern");
         schema.put("additionalProperties", false);
-        return new ToolDefinition("glob", "按 Glob 模式搜索工作区文件", schema, ToolRisk.LOW);
+        return new ToolDefinition(
+                "glob",
+                "按文件名或路径 Glob 模式发现工作区中的候选文件，适合作为探索项目结构的第一步。"
+                        + "定位后配合 grep 搜索内容、read_file 阅读上下文。",
+                schema,
+                ToolRisk.LOW);
     }
 }

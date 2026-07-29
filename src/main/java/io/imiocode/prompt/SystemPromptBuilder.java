@@ -1,5 +1,13 @@
 package io.imiocode.prompt;
 
+import io.imiocode.prompt.section.BehaviorSection;
+import io.imiocode.prompt.section.CodeQualitySection;
+import io.imiocode.prompt.section.IdentitySection;
+import io.imiocode.prompt.section.OutputStyleSection;
+import io.imiocode.prompt.section.SecuritySection;
+import io.imiocode.prompt.section.TaskPatternSection;
+import io.imiocode.prompt.section.ToolUsageSection;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -21,6 +29,17 @@ public final class SystemPromptBuilder {
         }
         this.sections = List.copyOf(sections);
         this.sections.forEach(value -> Objects.requireNonNull(value, "Prompt Section 不能为空"));
+    }
+
+    public static SystemPromptBuilder defaults() {
+        return new SystemPromptBuilder(List.of(
+                new IdentitySection(),
+                new BehaviorSection(),
+                new ToolUsageSection(),
+                new CodeQualitySection(),
+                new SecuritySection(),
+                new TaskPatternSection(),
+                new OutputStyleSection()));
     }
 
     public String build() {
