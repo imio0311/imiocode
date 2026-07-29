@@ -76,6 +76,15 @@ public final class ToolRegistry {
                 .toList();
     }
 
+    public synchronized List<ToolDefinition> enabledDefinitions(
+            ToolSelection selection
+    ) {
+        Objects.requireNonNull(selection, "selection");
+        return enabledDefinitions().stream()
+                .filter(definition -> selection.allows(definition.name()))
+                .toList();
+    }
+
     public <T> List<T> exportEnabled(ToolDefinitionEncoder<T> encoder) {
         return exportEnabled(ToolSelection.allEnabled(), encoder);
     }
@@ -86,10 +95,8 @@ public final class ToolRegistry {
         Objects.requireNonNull(selection, "selection");
         Objects.requireNonNull(encoder, "encoder");
         List<T> encoded = new ArrayList<>();
-        for (ToolDefinition definition : enabledDefinitions()) {
-            if (selection.allows(definition.name())) {
-                encoded.add(Objects.requireNonNull(encoder.encode(definition), "编码结果"));
-            }
+        for (ToolDefinition definition : enabledDefinitions(selection)) {
+            encoded.add(Objects.requireNonNull(encoder.encode(definition), "编码结果"));
         }
         return List.copyOf(encoded);
     }

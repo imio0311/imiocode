@@ -58,6 +58,26 @@ class ToolRegistryTest {
     }
 
     @Test
+    void returnsOnlyEnabledDefinitionsAllowedBySelection() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new StubTool("zeta"));
+        registry.register(new StubTool("alpha"));
+        registry.register(new StubTool("beta"));
+        registry.disable("beta");
+
+        assertEquals(List.of("alpha"),
+                registry.enabledDefinitions(ToolSelection.only(Set.of("alpha", "beta")))
+                        .stream()
+                        .map(ToolDefinition::name)
+                        .toList());
+        assertEquals(List.of("alpha", "zeta"),
+                registry.enabledDefinitions(ToolSelection.allEnabled())
+                        .stream()
+                        .map(ToolDefinition::name)
+                        .toList());
+    }
+
+    @Test
     void resolvesUnknownDisabledDisallowedAndAvailableSeparately() {
         ToolRegistry registry = new ToolRegistry();
         registry.register(new StubTool("read"));
