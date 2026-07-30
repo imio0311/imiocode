@@ -13,6 +13,8 @@ import io.imiocode.llm.LlmException;
 import io.imiocode.prompt.EnvironmentContextCollector;
 import io.imiocode.prompt.EnvironmentContextProvider;
 import io.imiocode.prompt.EnvironmentReminderFormatter;
+import io.imiocode.permission.PermissionGate;
+import io.imiocode.permission.PermissionReply;
 import io.imiocode.tool.ToolExecution;
 import io.imiocode.tool.ToolRegistry;
 import io.imiocode.tool.ToolSelection;
@@ -43,6 +45,7 @@ public final class Agent implements AutoCloseable {
     private final int initialOutputTokenLimit;
     private final EnvironmentContextProvider environmentContextProvider;
     private final EnvironmentReminderFormatter environmentReminderFormatter;
+    private final PermissionGate permissionGate;
     private final AtomicReference<ModeState> modeState =
             new AtomicReference<>(new ModeState(AgentMode.DO, false));
     private final AtomicReference<AgentTaskContext> activeTask = new AtomicReference<>();
@@ -70,7 +73,8 @@ public final class Agent implements AutoCloseable {
                         Path.of("").toAbsolutePath(),
                         Clock.systemDefaultZone(),
                         Duration.ofSeconds(2)),
-                new EnvironmentReminderFormatter());
+                new EnvironmentReminderFormatter(),
+                null);
     }
 
     public Agent(
@@ -81,6 +85,25 @@ public final class Agent implements AutoCloseable {
             EnvironmentContextProvider environmentContextProvider,
             EnvironmentReminderFormatter environmentReminderFormatter
     ) {
+        this(
+                client,
+                registry,
+                config,
+                initialOutputTokenLimit,
+                environmentContextProvider,
+                environmentReminderFormatter,
+                null);
+    }
+
+    public Agent(
+            LlmClient client,
+            ToolRegistry registry,
+            AgentConfig config,
+            int initialOutputTokenLimit,
+            EnvironmentContextProvider environmentContextProvider,
+            EnvironmentReminderFormatter environmentReminderFormatter,
+            PermissionGate permissionGate
+    ) {
         this.client = Objects.requireNonNull(client, "client 不能为空");
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
         this.config = Objects.requireNonNull(config, "config 不能为空");
@@ -90,12 +113,13 @@ public final class Agent implements AutoCloseable {
         this.environmentReminderFormatter = Objects.requireNonNull(
                 environmentReminderFormatter,
                 "环境提醒格式化器不能为空");
+        this.permissionGate = permissionGate;
         if (initialOutputTokenLimit <= 0) {
             throw new IllegalArgumentException("initialOutputTokenLimit 必须为正数");
         }
         this.initialOutputTokenLimit = initialOutputTokenLimit;
         this.turnExecutor = new StreamingTurnExecutor(
-                client, registry, config.maxParallelTools());
+                client, registry, config.maxParallelTools(), permissionGate);
     }
 
     public AgentMode mode() {
@@ -370,6 +394,13 @@ public final class Agent implements AutoCloseable {
         if (context != null) {
             context.requestStop(AgentStopReason.CANCELLED, client);
         }
+        if (permissionGate != null) {
+            permissionGate.cancelPending();
+        }
+    }
+
+    public boolean respondPermission(String requestId, PermissionReply reply) {
+        return permissionGate != null && permissionGate.resolve(requestId, reply);
     }
 
     private static void emitSafely(AgentEventListener listener, AgentEvent event) {
@@ -391,6 +422,9 @@ public final class Agent implements AutoCloseable {
         if (closed.compareAndSet(false, true)) {
             cancelActive();
             watchdog.shutdownNow();
+            if (permissionGate != null) {
+                permissionGate.close();
+            }
             client.close();
         }
     }

@@ -1,5 +1,9 @@
 package io.imiocode.agent;
 
+import io.imiocode.permission.PermissionAction;
+import io.imiocode.permission.PermissionDecision;
+import io.imiocode.permission.PermissionEvaluation;
+import io.imiocode.permission.PermissionGate;
 import io.imiocode.tool.Tool;
 import io.imiocode.tool.ToolAvailability;
 import io.imiocode.tool.ToolCall;
@@ -37,11 +41,13 @@ public final class StreamingToolScheduler implements AutoCloseable {
     private final UnknownToolCircuitBreaker.Attempt circuit;
     private final Runnable circuitOpened;
     private final Runnable unsafeExecutionStarted;
+    private final PermissionGate permissionGate;
     private final ToolExecutor toolExecutor;
     private final ExecutorService parallelExecutor;
     private final Map<Integer, ToolCall> calls = new TreeMap<>();
     private final Map<Integer, ToolExecution> results = new HashMap<>();
     private final Map<Integer, Future<ToolExecution>> futures = new HashMap<>();
+    private final Map<Integer, PermissionEvaluation> permissionEvaluations = new HashMap<>();
     private final AtomicBoolean toolsStarted = new AtomicBoolean();
     private boolean streamCompleted;
     private boolean eagerBarrier;
@@ -60,6 +66,31 @@ public final class StreamingToolScheduler implements AutoCloseable {
             Runnable circuitOpened,
             Runnable unsafeExecutionStarted
     ) {
+        this(
+                registry,
+                selection,
+                iteration,
+                maxParallelTools,
+                toolsMayExecute,
+                circuit,
+                listener,
+                circuitOpened,
+                unsafeExecutionStarted,
+                null);
+    }
+
+    public StreamingToolScheduler(
+            ToolRegistry registry,
+            ToolSelection selection,
+            int iteration,
+            int maxParallelTools,
+            boolean toolsMayExecute,
+            UnknownToolCircuitBreaker.Attempt circuit,
+            AgentEventListener listener,
+            Runnable circuitOpened,
+            Runnable unsafeExecutionStarted,
+            PermissionGate permissionGate
+    ) {
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
         this.selection = Objects.requireNonNull(selection, "selection 不能为空");
         if (iteration <= 0 || maxParallelTools <= 0) {
@@ -72,6 +103,7 @@ public final class StreamingToolScheduler implements AutoCloseable {
         this.circuitOpened = Objects.requireNonNull(circuitOpened, "circuitOpened 不能为空");
         this.unsafeExecutionStarted =
                 Objects.requireNonNull(unsafeExecutionStarted, "unsafeExecutionStarted 不能为空");
+        this.permissionGate = permissionGate;
         this.toolExecutor = new ToolExecutor(registry);
         this.parallelExecutor = Executors.newFixedThreadPool(
                 maxParallelTools,
@@ -119,6 +151,18 @@ public final class StreamingToolScheduler implements AutoCloseable {
                 continue;
             }
             Tool tool = resolution.tool().orElseThrow();
+            PermissionEvaluation evaluation = permissionEvaluation(nextEager, call, tool);
+            if (evaluation != null
+                    && evaluation.decision().action() == PermissionAction.DENY) {
+                results.put(nextEager, permissionDeniedExecution(call, evaluation.decision()));
+                nextEager++;
+                continue;
+            }
+            if (evaluation != null
+                    && evaluation.decision().action() == PermissionAction.ASK) {
+                eagerBarrier = true;
+                return;
+            }
             if (tool.definition().risk() != ToolRisk.LOW) {
                 eagerBarrier = true;
                 return;
@@ -189,7 +233,14 @@ public final class StreamingToolScheduler implements AutoCloseable {
                 position++;
                 continue;
             }
-            if (resolution.tool().orElseThrow().definition().risk() != ToolRisk.LOW) {
+            Tool tool = resolution.tool().orElseThrow();
+            PermissionDecision permission = resolvePermission(index, call, tool);
+            if (permission.action() == PermissionAction.DENY) {
+                putResult(index, permissionDeniedExecution(call, permission));
+                position++;
+                continue;
+            }
+            if (tool.definition().risk() != ToolRisk.LOW) {
                 unsafeExecutionStarted.run();
                 toolsStarted.set(true);
                 putResult(index, executeOne(index, call));
@@ -198,6 +249,11 @@ public final class StreamingToolScheduler implements AutoCloseable {
             }
 
             List<Integer> safeBatch = new ArrayList<>();
+            synchronized (this) {
+                startParallel(index, call);
+            }
+            safeBatch.add(index);
+            position++;
             while (position < indexes.size()) {
                 int candidateIndex = indexes.get(position);
                 if (hasResultOrFuture(candidateIndex)) {
@@ -209,6 +265,14 @@ public final class StreamingToolScheduler implements AutoCloseable {
                 if (candidateResolution.availability() != ToolAvailability.AVAILABLE
                         || candidateResolution.tool().orElseThrow()
                         .definition().risk() != ToolRisk.LOW) {
+                    break;
+                }
+                PermissionEvaluation candidateEvaluation = permissionEvaluation(
+                        candidateIndex,
+                        candidate,
+                        candidateResolution.tool().orElseThrow());
+                if (candidateEvaluation != null
+                        && candidateEvaluation.decision().action() != PermissionAction.ALLOW) {
                     break;
                 }
                 synchronized (this) {
@@ -281,6 +345,9 @@ public final class StreamingToolScheduler implements AutoCloseable {
             return;
         }
         cancelled = true;
+        if (permissionGate != null) {
+            permissionGate.cancelPending();
+        }
         cancelRunning();
     }
 
@@ -313,6 +380,46 @@ public final class StreamingToolScheduler implements AutoCloseable {
         return new ToolExecution(
                 call,
                 ToolResult.interrupted("", "工具执行已中断", false));
+    }
+
+    private synchronized PermissionEvaluation permissionEvaluation(
+            int index,
+            ToolCall call,
+            Tool tool
+    ) {
+        if (permissionGate == null) {
+            return null;
+        }
+        return permissionEvaluations.computeIfAbsent(
+                index,
+                ignored -> permissionGate.evaluate(call, tool.definition()));
+    }
+
+    private PermissionDecision resolvePermission(int index, ToolCall call, Tool tool) {
+        PermissionEvaluation evaluation = permissionEvaluation(index, call, tool);
+        if (evaluation == null) {
+            return PermissionDecision.allow(
+                    io.imiocode.permission.PermissionDecisionSource.MODE,
+                    "兼容调用方已允许工具");
+        }
+        if (evaluation.decision().action() != PermissionAction.ASK) {
+            return evaluation.decision();
+        }
+        return permissionGate.confirm(
+                evaluation,
+                iteration,
+                prompt -> listener.onEvent(new AgentEvent.PermissionRequested(prompt)),
+                (requestId, reply) -> listener.onEvent(
+                        new AgentEvent.PermissionResolved(requestId, reply)));
+    }
+
+    private static ToolExecution permissionDeniedExecution(
+            ToolCall call,
+            PermissionDecision decision
+    ) {
+        return new ToolExecution(
+                call,
+                ToolResult.failure("权限拒绝：" + decision.reason()));
     }
 
     @Override

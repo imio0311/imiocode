@@ -2,6 +2,9 @@ package io.imiocode.agent;
 
 import io.imiocode.llm.TokenUsage;
 import io.imiocode.llm.LlmErrorType;
+import io.imiocode.permission.PermissionPrompt;
+import io.imiocode.permission.PermissionReply;
+import io.imiocode.tool.ToolRisk;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.RecordComponent;
@@ -48,5 +51,16 @@ class AgentEventTest {
                 1, 5, LlmErrorType.NETWORK, Duration.ZERO, 8_000));
         assertThrows(IllegalArgumentException.class, () -> new AgentEvent.RetryScheduled(
                 1, 2, LlmErrorType.NETWORK, Duration.ofSeconds(-1), 8_000));
+    }
+
+    @Test
+    void validatesPermissionEventsWithoutToolArguments() {
+        PermissionPrompt prompt = new PermissionPrompt(
+                "permission-1", 1, "bash", ToolRisk.HIGH, "mvn test", "需要确认");
+        assertDoesNotThrow(() -> new AgentEvent.PermissionRequested(prompt));
+        assertDoesNotThrow(() -> new AgentEvent.PermissionResolved(
+                "permission-1", PermissionReply.ALLOW_ONCE));
+        assertThrows(IllegalArgumentException.class, () -> new AgentEvent.PermissionResolved(
+                " ", PermissionReply.DENY));
     }
 }

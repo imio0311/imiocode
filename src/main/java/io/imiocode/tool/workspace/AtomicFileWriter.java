@@ -19,6 +19,7 @@ public final class AtomicFileWriter {
     public void write(String input, String content) throws IOException {
         Path target = policy.resolveWritableFile(input);
         Path parent = target.getParent();
+        policy.revalidateWritable(target);
         Path temporary = Files.createTempFile(parent, ".imiocode-", ".tmp");
         try {
             Files.writeString(temporary, content, StandardCharsets.UTF_8);

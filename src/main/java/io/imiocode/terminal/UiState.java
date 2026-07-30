@@ -7,6 +7,7 @@ public enum UiState {
     STREAMING("Streaming"),
     TOOL_WAITING("Tool waiting"),
     TOOL_RUNNING("Tool running"),
+    PERMISSION_WAITING("Permission waiting"),
     ERROR("Error");
 
     private final String label;

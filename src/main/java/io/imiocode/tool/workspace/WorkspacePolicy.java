@@ -122,6 +122,13 @@ public final class WorkspacePolicy {
     }
 
     private void validateSensitive(Path relative) {
+        String relativePath = relative.toString()
+                .replace('\\', '/')
+                .toLowerCase(Locale.ROOT);
+        if (relativePath.equals(".imiocode/permissions.yaml")
+                || relativePath.equals(".imiocode/permissions.local.yaml")) {
+            throw new IllegalArgumentException("不允许工具修改权限配置");
+        }
         for (Path segment : relative) {
             String name = segment.toString().toLowerCase(Locale.ROOT);
             if (name.equals(".git")

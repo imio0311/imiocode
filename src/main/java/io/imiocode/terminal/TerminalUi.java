@@ -5,6 +5,8 @@ import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.AgentStopReason;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.llm.TokenUsage;
+import io.imiocode.permission.PermissionPrompt;
+import io.imiocode.permission.PermissionReply;
 
 public interface TerminalUi extends AutoCloseable {
     void showWelcome(UiContext context);
@@ -34,6 +36,18 @@ public interface TerminalUi extends AutoCloseable {
     }
 
     default void showToolEvent(ToolExecutionEvent event) {
+    }
+
+    default PermissionReply confirmPermission(PermissionPrompt prompt) {
+        return PermissionReply.DENY;
+    }
+
+    default void showPermissionResolved(PermissionReply reply) {
+        printInfo("[权限] " + switch (reply) {
+            case ALLOW_ONCE -> "已允许本次操作";
+            case ALLOW_SESSION -> "本次会话已允许相同操作";
+            case DENY -> "已拒绝操作";
+        });
     }
 
     default void showAgentMode(AgentMode mode) {

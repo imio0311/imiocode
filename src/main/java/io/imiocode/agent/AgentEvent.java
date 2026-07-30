@@ -2,6 +2,8 @@ package io.imiocode.agent;
 
 import io.imiocode.llm.TokenUsage;
 import io.imiocode.llm.LlmErrorType;
+import io.imiocode.permission.PermissionPrompt;
+import io.imiocode.permission.PermissionReply;
 import io.imiocode.tool.ToolExecutionEvent;
 
 import java.util.Objects;
@@ -127,6 +129,22 @@ public sealed interface AgentEvent {
             requireNonNegative(batchIndex, "batchIndex");
             kind = Objects.requireNonNull(kind, "kind 不能为空");
             requirePositive(size, "size");
+        }
+    }
+
+    record PermissionRequested(PermissionPrompt prompt) implements AgentEvent {
+        public PermissionRequested {
+            prompt = Objects.requireNonNull(prompt, "prompt 不能为空");
+        }
+    }
+
+    record PermissionResolved(
+            String requestId,
+            PermissionReply reply
+    ) implements AgentEvent {
+        public PermissionResolved {
+            requestId = requireText(requestId, "requestId");
+            reply = Objects.requireNonNull(reply, "reply 不能为空");
         }
     }
 

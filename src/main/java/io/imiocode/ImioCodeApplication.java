@@ -10,6 +10,17 @@ import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmClientFactory;
 import io.imiocode.prompt.EnvironmentContextCollector;
 import io.imiocode.prompt.EnvironmentReminderFormatter;
+import io.imiocode.permission.PermissionChecker;
+import io.imiocode.permission.PermissionCoordinator;
+import io.imiocode.permission.PermissionGate;
+import io.imiocode.permission.PermissionModePolicy;
+import io.imiocode.permission.PermissionRequestFactory;
+import io.imiocode.permission.PermissionSettings;
+import io.imiocode.permission.command.RegexDangerousCommandDetector;
+import io.imiocode.permission.command.StrictSafeCommandDetector;
+import io.imiocode.permission.rule.PermissionRuleEngine;
+import io.imiocode.permission.rule.PermissionRuleLoader;
+import io.imiocode.permission.sandbox.WorkspacePathSandbox;
 import io.imiocode.terminal.JLineTerminalUi;
 import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiContext;
@@ -51,6 +62,22 @@ public final class ImioCodeApplication {
             ToolLimits limits = ToolLimits.defaults();
             SecretRedactor redactor = new SecretRedactor(config.apiKey());
             WorkspacePolicy policy = new WorkspacePolicy(workspace);
+            PermissionSettings permissionSettings = new PermissionRuleLoader().load(
+                    workspace,
+                    Path.of(System.getProperty("user.home")).toAbsolutePath().normalize());
+            WorkspacePathSandbox sandbox = new WorkspacePathSandbox(policy);
+            PermissionChecker permissionChecker = new PermissionChecker(
+                    workspace,
+                    new RegexDangerousCommandDetector(),
+                    sandbox,
+                    new PermissionRuleEngine(),
+                    new PermissionModePolicy(),
+                    permissionSettings,
+                    new StrictSafeCommandDetector(workspace));
+            PermissionGate permissionGate = new PermissionGate(
+                    new PermissionRequestFactory(redactor),
+                    permissionChecker,
+                    new PermissionCoordinator());
             ToolRegistry registry = new ToolRegistry();
             registry.register(new ReadFileTool(policy, limits, redactor));
             registry.register(new WriteFileTool(policy, limits, redactor));
@@ -70,7 +97,8 @@ public final class ImioCodeApplication {
                             Clock.systemDefaultZone(),
                             Duration.ofSeconds(2),
                             config.model()),
-                    new EnvironmentReminderFormatter());
+                    new EnvironmentReminderFormatter(),
+                    permissionGate);
             session = new ConversationSession(agent);
             terminal = new JLineTerminalUi(redactor);
             terminal.showWelcome(new UiContext(
@@ -80,6 +108,8 @@ public final class ImioCodeApplication {
                     config.model(),
                     workspace));
             terminal.printInfo("输入 /exit 或 /quit 退出。");
+            terminal.printInfo("[权限] 当前模式: "
+                    + permissionSettings.mode().name().toLowerCase(java.util.Locale.ROOT));
 
             new ConversationLoop(session, terminal).run();
             return 0;

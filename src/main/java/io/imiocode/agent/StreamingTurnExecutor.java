@@ -5,6 +5,7 @@ import io.imiocode.conversation.ChatResponse;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
+import io.imiocode.permission.PermissionGate;
 import io.imiocode.tool.ToolExecution;
 import io.imiocode.tool.ToolRegistry;
 
@@ -23,13 +24,24 @@ public final class StreamingTurnExecutor {
     private final LlmRetryPolicy retryPolicy;
     private final RetryWaiter retryWaiter;
     private final int maxParallelTools;
+    private final PermissionGate permissionGate;
 
     public StreamingTurnExecutor(
             LlmClient client,
             ToolRegistry registry,
             int maxParallelTools
     ) {
-        this(client, registry, maxParallelTools, new LlmRetryPolicy(), new DefaultRetryWaiter());
+        this(client, registry, maxParallelTools, new LlmRetryPolicy(), new DefaultRetryWaiter(), null);
+    }
+
+    public StreamingTurnExecutor(
+            LlmClient client,
+            ToolRegistry registry,
+            int maxParallelTools,
+            PermissionGate permissionGate
+    ) {
+        this(client, registry, maxParallelTools, new LlmRetryPolicy(), new DefaultRetryWaiter(),
+                permissionGate);
     }
 
     StreamingTurnExecutor(
@@ -38,6 +50,17 @@ public final class StreamingTurnExecutor {
             int maxParallelTools,
             LlmRetryPolicy retryPolicy,
             RetryWaiter retryWaiter
+    ) {
+        this(client, registry, maxParallelTools, retryPolicy, retryWaiter, null);
+    }
+
+    StreamingTurnExecutor(
+            LlmClient client,
+            ToolRegistry registry,
+            int maxParallelTools,
+            LlmRetryPolicy retryPolicy,
+            RetryWaiter retryWaiter,
+            PermissionGate permissionGate
     ) {
         this.client = Objects.requireNonNull(client, "client 不能为空");
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
@@ -48,6 +71,7 @@ public final class StreamingTurnExecutor {
         this.collector = new StreamingResponseCollector(client);
         this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy 不能为空");
         this.retryWaiter = Objects.requireNonNull(retryWaiter, "retryWaiter 不能为空");
+        this.permissionGate = permissionGate;
     }
 
     public StreamingTurnResult execute(
@@ -82,7 +106,8 @@ public final class StreamingTurnExecutor {
                         circuitState.open = true;
                         client.cancelActiveRequest();
                     },
-                    task::markSideEffectsPossible
+                    task::markSideEffectsPossible,
+                    permissionGate
             )) {
                 Runnable cancellation = scheduler::cancel;
                 task.attachCancellation(cancellation);

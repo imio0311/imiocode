@@ -9,6 +9,7 @@ import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
 import io.imiocode.llm.StreamListener;
+import io.imiocode.permission.PermissionReply;
 import io.imiocode.tool.ToolExecutor;
 import io.imiocode.tool.ToolRegistry;
 
@@ -121,6 +122,13 @@ public final class ConversationSession implements AutoCloseable {
 
     public void cancelActive() {
         agent.cancelActive();
+    }
+
+    public boolean respondPermission(String requestId, PermissionReply reply) {
+        if (closed.get()) {
+            return false;
+        }
+        return agent.respondPermission(requestId, reply);
     }
 
     @Override

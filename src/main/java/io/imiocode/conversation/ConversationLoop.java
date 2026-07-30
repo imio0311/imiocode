@@ -7,6 +7,7 @@ import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiState;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
+import io.imiocode.permission.PermissionReply;
 
 import java.util.Locale;
 import java.util.Objects;
@@ -96,6 +97,19 @@ public final class ConversationLoop {
                         } else if (event instanceof AgentEvent.ToolBatchStarted) {
                         } else if (event instanceof AgentEvent.ToolExecutionChanged changed) {
                             onToolEvent(changed.execution());
+                        } else if (event instanceof AgentEvent.PermissionRequested requested) {
+                            finishLines();
+                            terminal.updateState(UiState.PERMISSION_WAITING);
+                            PermissionReply reply =
+                                    terminal.confirmPermission(requested.prompt());
+                            if (!session.respondPermission(
+                                    requested.prompt().requestId(), reply)
+                                    && !stopping.get()) {
+                                terminal.printError("权限请求已失效");
+                            }
+                        } else if (event instanceof AgentEvent.PermissionResolved resolved) {
+                            terminal.showPermissionResolved(resolved.reply());
+                            updateStateIfChanged(UiState.TOOL_WAITING);
                         } else if (event instanceof AgentEvent.ModeChanged changed) {
                             terminal.showAgentMode(changed.current());
                         } else if (event instanceof AgentEvent.TaskCompleted) {

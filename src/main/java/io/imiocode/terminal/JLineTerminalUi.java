@@ -3,6 +3,8 @@ package io.imiocode.terminal;
 import io.imiocode.agent.AgentMode;
 import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.AgentStopReason;
+import io.imiocode.permission.PermissionPrompt;
+import io.imiocode.permission.PermissionReply;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
@@ -243,6 +245,72 @@ public final class JLineTerminalUi implements TerminalUi {
     }
 
     @Override
+    public synchronized PermissionReply confirmPermission(PermissionPrompt prompt) {
+        Objects.requireNonNull(prompt, "prompt 不能为空");
+        if (closed.get()) {
+            return PermissionReply.DENY;
+        }
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        TerminalMode mode = currentMode();
+        printStyled(
+                "[权限确认] 工具=" + prompt.toolName()
+                        + "  风险=" + prompt.risk().name().toLowerCase(java.util.Locale.ROOT),
+                AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW),
+                mode);
+        writer.println("目标: " + prompt.targetSummary());
+        writer.println("原因: " + prompt.reason());
+        writer.println("[1] 允许一次  [2] 本次会话允许相同操作  [3] 拒绝");
+        writer.flush();
+        while (!closed.get()) {
+            try {
+                String answer = lineReader.readLine(styledPrompt("选择> ", mode));
+                if (answer == null) {
+                    return PermissionReply.DENY;
+                }
+                switch (answer.trim().toLowerCase(java.util.Locale.ROOT)) {
+                    case "1", "once" -> {
+                        return PermissionReply.ALLOW_ONCE;
+                    }
+                    case "2", "session" -> {
+                        return PermissionReply.ALLOW_SESSION;
+                    }
+                    case "3", "deny", "no", "n" -> {
+                        return PermissionReply.DENY;
+                    }
+                    default -> {
+                        writer.println("请输入 1、2 或 3。");
+                        writer.flush();
+                    }
+                }
+            } catch (UserInterruptException exception) {
+                interruptHandler.get().run();
+                return PermissionReply.DENY;
+            } catch (EndOfFileException exception) {
+                return PermissionReply.DENY;
+            }
+        }
+        return PermissionReply.DENY;
+    }
+
+    @Override
+    public synchronized void showPermissionResolved(PermissionReply reply) {
+        if (closed.get()) {
+            return;
+        }
+        String message = switch (reply) {
+            case ALLOW_ONCE -> "[权限] 已允许本次操作";
+            case ALLOW_SESSION -> "[权限] 本次会话已允许相同操作";
+            case DENY -> "[权限] 已拒绝操作";
+        };
+        int color = reply == PermissionReply.DENY
+                ? AttributedStyle.RED
+                : AttributedStyle.GREEN;
+        printStyled(message, AttributedStyle.DEFAULT.foreground(color), currentMode());
+        writer.flush();
+    }
+
+    @Override
     public synchronized void showAgentMode(AgentMode mode) {
         if (closed.get()) {
             return;
@@ -376,6 +444,7 @@ public final class JLineTerminalUi implements TerminalUi {
             case STREAMING -> AttributedStyle.CYAN;
             case TOOL_WAITING -> AttributedStyle.YELLOW;
             case TOOL_RUNNING -> AttributedStyle.CYAN;
+            case PERMISSION_WAITING -> AttributedStyle.YELLOW;
             case ERROR -> AttributedStyle.RED;
         };
         return AttributedStyle.DEFAULT.foreground(color);

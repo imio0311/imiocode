@@ -31,6 +31,8 @@ class WorkspacePolicyTest {
     @Test
     void rejectsAbsoluteTraversalAndProtectedPaths() throws IOException {
         Files.createDirectory(workspace.resolve(".git"));
+        Files.createDirectory(workspace.resolve(".imiocode"));
+        Files.writeString(workspace.resolve(".imiocode/permissions.yaml"), "mode: ask");
         Files.writeString(workspace.resolve("config.yaml"), "secret");
         Files.writeString(workspace.resolve(".env.local"), "secret");
         WorkspacePolicy policy = new WorkspacePolicy(workspace);
@@ -42,6 +44,8 @@ class WorkspacePolicyTest {
         assertThrows(IllegalArgumentException.class, () -> policy.resolveExistingPath(".git"));
         assertThrows(IllegalArgumentException.class, () -> policy.resolveExistingFile("config.yaml"));
         assertThrows(IllegalArgumentException.class, () -> policy.resolveExistingFile(".env.local"));
+        assertThrows(IllegalArgumentException.class,
+                () -> policy.resolveWritableFile(".imiocode/permissions.yaml"));
         assertFalse(policy.isAllowedDiscoveredPath(workspace.resolve(".git")));
     }
 
