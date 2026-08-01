@@ -5,6 +5,8 @@ import io.imiocode.agent.AgentMode;
 import io.imiocode.agent.AgentRequest;
 import io.imiocode.agent.AgentResult;
 import io.imiocode.config.AgentConfig;
+import io.imiocode.context.CompactReport;
+import io.imiocode.context.ContextResult;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
@@ -79,19 +81,23 @@ public final class ConversationSession implements AutoCloseable {
                 new AgentRequest(committed, userMessage, reminders),
                 listener::onAgentEvent
         );
+        applyResultHistory(result);
         if (!result.completed()) {
             throw ConversationException.from(result);
         }
         if (closed.get()) {
             throw new ConversationException("会话已关闭", false, true, result.toolsExecuted());
         }
-        commit(result.trajectory());
         return result.finalResponse().orElseThrow();
     }
 
-    private void commit(List<ChatMessage> messages) {
+    private void applyResultHistory(AgentResult result) {
         synchronized (history) {
-            history.addAll(messages);
+            history.clear();
+            history.addAll(result.committedHistory());
+            if (result.completed()) {
+                history.addAll(result.trajectory());
+            }
         }
     }
 
@@ -122,6 +128,24 @@ public final class ConversationSession implements AutoCloseable {
 
     public void cancelActive() {
         agent.cancelActive();
+    }
+
+    public synchronized CompactReport forceCompact(ConversationListener listener) {
+        Objects.requireNonNull(listener, "listener");
+        List<ChatMessage> snapshot = historySnapshot();
+        if (snapshot.isEmpty()) {
+            return new CompactReport(0, 0, 0, false,
+                    io.imiocode.context.ContextOutcome.UNCHANGED, "当前没有可压缩的历史");
+        }
+        ContextResult result = agent.forceCompactHistory(snapshot, listener::onAgentEvent);
+        if (result.compacted()) {
+            synchronized (history) {
+                history.clear();
+                history.addAll(result.workingMessages());
+            }
+        }
+        return new CompactReport(result.beforeTokens(), result.afterTokens(), result.spilledResults(),
+                result.compacted(), result.outcome(), result.compacted() ? "上下文压缩完成" : "上下文未发生变化");
     }
 
     public boolean respondPermission(String requestId, PermissionReply reply) {

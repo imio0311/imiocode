@@ -1,6 +1,11 @@
 package io.imiocode.agent;
 
 import io.imiocode.config.AgentConfig;
+import io.imiocode.context.AutoCompactTrackingState;
+import io.imiocode.context.ContextManageMode;
+import io.imiocode.context.ContextManager;
+import io.imiocode.context.ContextRequest;
+import io.imiocode.context.ContextResult;
 import io.imiocode.conversation.ChatMessage;
 import io.imiocode.conversation.ChatRequest;
 import io.imiocode.conversation.ChatResponse;
@@ -9,6 +14,7 @@ import io.imiocode.conversation.MessageRole;
 import io.imiocode.conversation.SystemReminder;
 import io.imiocode.conversation.ToolResultPart;
 import io.imiocode.llm.LlmClient;
+import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
 import io.imiocode.prompt.EnvironmentContextCollector;
 import io.imiocode.prompt.EnvironmentContextProvider;
@@ -46,6 +52,7 @@ public final class Agent implements AutoCloseable {
     private final EnvironmentContextProvider environmentContextProvider;
     private final EnvironmentReminderFormatter environmentReminderFormatter;
     private final PermissionGate permissionGate;
+    private final ContextManager contextManager;
     private final AtomicReference<ModeState> modeState =
             new AtomicReference<>(new ModeState(AgentMode.DO, false));
     private final AtomicReference<AgentTaskContext> activeTask = new AtomicReference<>();
@@ -74,6 +81,7 @@ public final class Agent implements AutoCloseable {
                         Clock.systemDefaultZone(),
                         Duration.ofSeconds(2)),
                 new EnvironmentReminderFormatter(),
+                null,
                 null);
     }
 
@@ -92,6 +100,7 @@ public final class Agent implements AutoCloseable {
                 initialOutputTokenLimit,
                 environmentContextProvider,
                 environmentReminderFormatter,
+                null,
                 null);
     }
 
@@ -104,6 +113,20 @@ public final class Agent implements AutoCloseable {
             EnvironmentReminderFormatter environmentReminderFormatter,
             PermissionGate permissionGate
     ) {
+        this(client, registry, config, initialOutputTokenLimit, environmentContextProvider,
+                environmentReminderFormatter, permissionGate, null);
+    }
+
+    public Agent(
+            LlmClient client,
+            ToolRegistry registry,
+            AgentConfig config,
+            int initialOutputTokenLimit,
+            EnvironmentContextProvider environmentContextProvider,
+            EnvironmentReminderFormatter environmentReminderFormatter,
+            PermissionGate permissionGate,
+            ContextManager contextManager
+    ) {
         this.client = Objects.requireNonNull(client, "client 不能为空");
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
         this.config = Objects.requireNonNull(config, "config 不能为空");
@@ -114,6 +137,7 @@ public final class Agent implements AutoCloseable {
                 environmentReminderFormatter,
                 "环境提醒格式化器不能为空");
         this.permissionGate = permissionGate;
+        this.contextManager = contextManager;
         if (initialOutputTokenLimit <= 0) {
             throw new IllegalArgumentException("initialOutputTokenLimit 必须为正数");
         }
@@ -164,8 +188,9 @@ public final class Agent implements AutoCloseable {
         SystemReminder environmentReminder = environmentReminderFormatter.format(
                 environmentContextProvider.capture());
         List<SystemReminder> sessionReminders = List.copyOf(request.reminders());
-        List<ChatMessage> trajectory = new ArrayList<>();
-        trajectory.add(request.userMessage());
+        ManagedConversationState conversation = new ManagedConversationState(
+                request.committedHistory(), request.userMessage());
+        AutoCompactTrackingState compactTracking = new AutoCompactTrackingState();
         int iterations = 0;
         UnknownToolCircuitBreaker unknownTools = new UnknownToolCircuitBreaker();
         ScheduledFuture<?> timeoutFuture = watchdog.schedule(
@@ -181,12 +206,12 @@ public final class Agent implements AutoCloseable {
                 iterations = iteration;
                 Optional<AgentStopReason> beforeIteration = context.stopReason();
                 if (beforeIteration.isPresent()) {
-                    return stopped(context, trajectory, iterations - 1,
+                    return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations - 1,
                             beforeIteration.get(), checkedListener);
                 }
                 if (context.deadlineReached()) {
                     context.requestStop(AgentStopReason.TIMEOUT, client);
-                    return stopped(context, trajectory, iterations - 1,
+                    return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations - 1,
                             AgentStopReason.TIMEOUT, checkedListener);
                 }
 
@@ -197,25 +222,44 @@ public final class Agent implements AutoCloseable {
                         taskMode,
                         taskModeSnapshot.includeExitReminder(),
                         iteration);
-                StreamingTurnResult turn = turnExecutor.execute(
-                        new ChatRequest(
-                                requestMessages(request.committedHistory(), trajectory),
-                                reminders,
-                                selection,
-                                OptionalInt.of(initialOutputTokenLimit)
-                        ),
-                        iteration,
-                        iteration < config.maxIterations(),
-                        context,
-                        unknownTools,
-                        checkedListener
-                );
+                if (contextManager != null) {
+                    ContextResult managed = contextManager.manage(new ContextRequest(
+                                    conversation.committed(), conversation.trajectory(), reminders, selection,
+                                    OptionalInt.of(initialOutputTokenLimit), ContextManageMode.AUTO, compactTracking),
+                            event -> checkedListener.onEvent(new AgentEvent.ContextChanged(event)));
+                    conversation.apply(managed);
+                }
+                StreamingTurnResult turn;
+                boolean contextRecovered = false;
+                while (true) {
+                    try {
+                        turn = turnExecutor.execute(
+                                new ChatRequest(conversation.workingMessages(), reminders, selection,
+                                        OptionalInt.of(initialOutputTokenLimit)),
+                                iteration, iteration < config.maxIterations(), context,
+                                unknownTools, checkedListener);
+                        break;
+                    } catch (LlmException exception) {
+                        if (exception.type() != LlmErrorType.CONTEXT_LIMIT || contextRecovered
+                                || contextManager == null || context.toolsExecuted()) {
+                            throw exception;
+                        }
+                        ContextResult recovered = contextManager.manage(new ContextRequest(
+                                        conversation.committed(), conversation.trajectory(), reminders, selection,
+                                        OptionalInt.of(initialOutputTokenLimit), ContextManageMode.RECOVERY,
+                                        compactTracking),
+                                event -> checkedListener.onEvent(new AgentEvent.ContextChanged(event)));
+                        if (!recovered.compacted()) throw exception;
+                        conversation.apply(recovered);
+                        contextRecovered = true;
+                    }
+                }
                 ChatResponse response = turn.response();
-                trajectory.add(response.message());
+                conversation.append(response.message());
 
                 Optional<AgentStopReason> afterModel = context.stopReason();
                 if (afterModel.isPresent()) {
-                    return stopped(context, trajectory, iteration,
+                    return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iteration,
                             afterModel.get(), checkedListener);
                 }
 
@@ -226,20 +270,21 @@ public final class Agent implements AutoCloseable {
                                 new AgentEvent.TaskCompleted(iteration)
                         );
                         return AgentResult.completed(
-                                trajectory,
+                                conversation.committed(),
+                                conversation.trajectory(),
                                 response,
                                 context.toolsExecuted(),
                                 context.sideEffectsPossible()
                         );
                     }
-                    return stopped(context, trajectory, iteration,
+                    return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iteration,
                             context.stopReason().orElse(AgentStopReason.CANCELLED),
                             checkedListener);
                 }
 
                 if (iteration == config.maxIterations()) {
                     context.tryFinish(AgentStopReason.MAX_ITERATIONS);
-                    return stopped(context, trajectory, iteration,
+                    return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iteration,
                             AgentStopReason.MAX_ITERATIONS, checkedListener);
                 }
 
@@ -250,31 +295,32 @@ public final class Agent implements AutoCloseable {
 
                 Optional<AgentStopReason> afterTools = context.stopReason();
                 if (afterTools.isPresent()) {
-                    return stopped(context, trajectory, iteration,
+                    return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iteration,
                             afterTools.get(), checkedListener);
                 }
-                trajectory.add(toToolMessage(executions));
+                conversation.append(toToolMessage(executions));
             }
 
             context.tryFinish(AgentStopReason.MAX_ITERATIONS);
-            return stopped(context, trajectory, iterations,
+            return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations,
                     AgentStopReason.MAX_ITERATIONS, checkedListener);
         } catch (UnknownToolCircuitOpenException exception) {
             if (!context.tryFinish(AgentStopReason.TOO_MANY_UNKNOWN_TOOLS)) {
                 AgentStopReason existing = context.stopReason()
                         .orElse(AgentStopReason.TOO_MANY_UNKNOWN_TOOLS);
-                return stopped(context, trajectory, iterations, existing, checkedListener);
+                return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations, existing, checkedListener);
             }
             return stopped(
                     context,
-                    trajectory,
+                    conversation.rollbackCommitted(),
+                    conversation.trajectory(),
                     iterations,
                     AgentStopReason.TOO_MANY_UNKNOWN_TOOLS,
                     checkedListener);
         } catch (LlmException exception) {
             Optional<AgentStopReason> existing = context.stopReason();
             if (existing.isPresent() && existing.get() != AgentStopReason.ERROR) {
-                return stopped(context, trajectory, iterations, existing.get(), checkedListener);
+                return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations, existing.get(), checkedListener);
             }
             AgentError error = new AgentError(
                     exception.safeMessage(),
@@ -282,15 +328,15 @@ public final class Agent implements AutoCloseable {
                     exception.retryAfter()
             );
             context.tryFinish(AgentStopReason.ERROR);
-            return failed(context, trajectory, iterations, error, checkedListener);
+            return failed(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations, error, checkedListener);
         } catch (RuntimeException exception) {
             Optional<AgentStopReason> existing = context.stopReason();
             if (existing.isPresent() && existing.get() != AgentStopReason.ERROR) {
-                return stopped(context, trajectory, iterations, existing.get(), checkedListener);
+                return stopped(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations, existing.get(), checkedListener);
             }
             AgentError error = new AgentError("Agent 执行失败", false);
             context.tryFinish(AgentStopReason.ERROR);
-            return failed(context, trajectory, iterations, error, checkedListener);
+            return failed(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations, error, checkedListener);
         } finally {
             timeoutFuture.cancel(false);
             activeTask.compareAndSet(context, null);
@@ -357,6 +403,7 @@ public final class Agent implements AutoCloseable {
 
     private static AgentResult stopped(
             AgentTaskContext context,
+            List<ChatMessage> committedHistory,
             List<ChatMessage> trajectory,
             int iterations,
             AgentStopReason reason,
@@ -366,6 +413,7 @@ public final class Agent implements AutoCloseable {
                 reason, Math.max(iterations, 0), context.sideEffectsPossible()));
         return AgentResult.stopped(
                 reason,
+                committedHistory,
                 trajectory,
                 context.toolsExecuted(),
                 context.sideEffectsPossible()
@@ -374,6 +422,7 @@ public final class Agent implements AutoCloseable {
 
     private static AgentResult failed(
             AgentTaskContext context,
+            List<ChatMessage> committedHistory,
             List<ChatMessage> trajectory,
             int iterations,
             AgentError error,
@@ -382,6 +431,7 @@ public final class Agent implements AutoCloseable {
         emitSafely(listener, new AgentEvent.TaskFailed(
                 Math.max(iterations, 0), error, context.sideEffectsPossible()));
         return AgentResult.failed(
+                committedHistory,
                 trajectory,
                 context.toolsExecuted(),
                 context.sideEffectsPossible(),
@@ -397,6 +447,23 @@ public final class Agent implements AutoCloseable {
         if (permissionGate != null) {
             permissionGate.cancelPending();
         }
+    }
+
+    /** 会话空闲时强制压缩已提交历史。 */
+    public ContextResult forceCompactHistory(List<ChatMessage> history, AgentEventListener listener) {
+        Objects.requireNonNull(history, "history");
+        ensureOpen();
+        if (activeTask.get() != null) throw new IllegalStateException("Agent 正在执行任务，暂不能压缩");
+        if (contextManager == null || history.isEmpty()) {
+            return new ContextResult(history, List.of(), history, 0, 0, 0, false,
+                    io.imiocode.context.ContextOutcome.UNCHANGED);
+        }
+        AgentEventListener events = Objects.requireNonNullElse(listener, AgentEventListener.NOOP);
+        return contextManager.manage(new ContextRequest(
+                        history, List.of(), List.of(), PlanModePrompt.toolSelection(mode()),
+                        OptionalInt.of(initialOutputTokenLimit), ContextManageMode.FORCE,
+                        new AutoCompactTrackingState()),
+                event -> events.onEvent(new AgentEvent.ContextChanged(event)));
     }
 
     public boolean respondPermission(String requestId, PermissionReply reply) {

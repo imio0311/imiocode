@@ -410,7 +410,9 @@ public final class DeepSeekClient implements LlmClient {
         try {
             JsonNode root = objectMapper.readTree(body);
             JsonNode error = root.path("error");
-            return error.path("code").asText(error.path("type").asText(""));
+            return error.path("code").asText("") + " "
+                    + error.path("type").asText("") + " "
+                    + error.path("message").asText("");
         } catch (IOException exception) {
             return "";
         }

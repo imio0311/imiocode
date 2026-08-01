@@ -12,6 +12,7 @@ import java.util.Optional;
  */
 public record AgentResult(
         AgentStopReason stopReason,
+        List<ChatMessage> committedHistory,
         List<ChatMessage> trajectory,
         Optional<ChatResponse> finalResponse,
         boolean toolsExecuted,
@@ -20,6 +21,7 @@ public record AgentResult(
 ) {
     public AgentResult {
         stopReason = Objects.requireNonNull(stopReason, "stopReason 不能为空");
+        committedHistory = List.copyOf(Objects.requireNonNull(committedHistory, "committedHistory 不能为空"));
         trajectory = List.copyOf(Objects.requireNonNull(trajectory, "trajectory 不能为空"));
         finalResponse = Objects.requireNonNullElse(finalResponse, Optional.empty());
         error = Objects.requireNonNullElse(error, Optional.empty());
@@ -42,6 +44,7 @@ public record AgentResult(
     }
 
     public static AgentResult completed(
+            List<ChatMessage> committedHistory,
             List<ChatMessage> trajectory,
             ChatResponse response,
             boolean toolsExecuted,
@@ -49,6 +52,7 @@ public record AgentResult(
     ) {
         return new AgentResult(
                 AgentStopReason.FINAL_RESPONSE,
+                committedHistory,
                 trajectory,
                 Optional.of(response),
                 toolsExecuted,
@@ -57,8 +61,14 @@ public record AgentResult(
         );
     }
 
+    public static AgentResult completed(List<ChatMessage> trajectory, ChatResponse response,
+                                        boolean toolsExecuted, boolean sideEffectsPossible) {
+        return completed(List.of(), trajectory, response, toolsExecuted, sideEffectsPossible);
+    }
+
     public static AgentResult stopped(
             AgentStopReason reason,
+            List<ChatMessage> committedHistory,
             List<ChatMessage> trajectory,
             boolean toolsExecuted,
             boolean sideEffectsPossible
@@ -68,6 +78,7 @@ public record AgentResult(
         }
         return new AgentResult(
                 reason,
+                committedHistory,
                 trajectory,
                 Optional.empty(),
                 toolsExecuted,
@@ -76,7 +87,13 @@ public record AgentResult(
         );
     }
 
+    public static AgentResult stopped(AgentStopReason reason, List<ChatMessage> trajectory,
+                                      boolean toolsExecuted, boolean sideEffectsPossible) {
+        return stopped(reason, List.of(), trajectory, toolsExecuted, sideEffectsPossible);
+    }
+
     public static AgentResult failed(
+            List<ChatMessage> committedHistory,
             List<ChatMessage> trajectory,
             boolean toolsExecuted,
             boolean sideEffectsPossible,
@@ -84,11 +101,17 @@ public record AgentResult(
     ) {
         return new AgentResult(
                 AgentStopReason.ERROR,
+                committedHistory,
                 trajectory,
                 Optional.empty(),
                 toolsExecuted,
                 sideEffectsPossible,
                 Optional.of(error)
         );
+    }
+
+    public static AgentResult failed(List<ChatMessage> trajectory, boolean toolsExecuted,
+                                     boolean sideEffectsPossible, AgentError error) {
+        return failed(List.of(), trajectory, toolsExecuted, sideEffectsPossible, error);
     }
 }

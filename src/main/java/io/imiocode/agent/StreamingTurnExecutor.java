@@ -116,7 +116,8 @@ public final class StreamingTurnExecutor {
                             request.messages(),
                             request.reminders(),
                             request.toolSelection(),
-                            OptionalInt.of(currentLimit));
+                            OptionalInt.of(currentLimit),
+                            request.systemPromptOverride());
                     ChatResponse response = collector.collect(
                             attemptRequest,
                             iteration,

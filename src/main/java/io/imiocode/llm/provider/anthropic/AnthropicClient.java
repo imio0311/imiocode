@@ -384,7 +384,9 @@ public final class AnthropicClient implements LlmClient {
         try {
             JsonNode root = objectMapper.readTree(body);
             JsonNode error = root.path("error");
-            return error.path("type").asText(error.path("code").asText(""));
+            return error.path("type").asText("") + " "
+                    + error.path("code").asText("") + " "
+                    + error.path("message").asText("");
         } catch (IOException exception) {
             return "";
         }

@@ -33,6 +33,13 @@ public final class HttpErrorMapper {
             return new LlmException(
                     LlmErrorType.RATE_LIMIT, true, statusCode, "请求受限，请稍后重试", retryAfter, null);
         }
+        if ((statusCode == 400 || statusCode == 413) && isContextLimit(normalizedCode)) {
+            return new LlmException(
+                    LlmErrorType.CONTEXT_LIMIT,
+                    true,
+                    statusCode,
+                    "输入上下文超过模型窗口限制");
+        }
         if (normalizedCode.contains("model") && (normalizedCode.contains("not_found") || normalizedCode.contains("not found"))) {
             return new LlmException(LlmErrorType.MODEL_NOT_FOUND, true, statusCode, "模型不存在或当前账号无权访问");
         }
@@ -40,6 +47,17 @@ public final class HttpErrorMapper {
             return new LlmException(LlmErrorType.SERVER_ERROR, true, statusCode, "模型服务暂时不可用");
         }
         return new LlmException(LlmErrorType.UNKNOWN, true, statusCode, "模型服务返回了无法处理的错误");
+    }
+
+    private static boolean isContextLimit(String value) {
+        return value.contains("context_length_exceeded")
+                || value.contains("context window")
+                || value.contains("maximum context length")
+                || value.contains("prompt is too long")
+                || value.contains("input is too long")
+                || value.contains("input tokens exceed")
+                || value.contains("too many input tokens")
+                || value.contains("request_too_large");
     }
 
     public LlmException fromTransport(Throwable throwable) {

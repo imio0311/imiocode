@@ -8,6 +8,7 @@ public enum LlmErrorType {
     NETWORK,
     TIMEOUT,
     OUTPUT_LIMIT,
+    CONTEXT_LIMIT,
     PROTOCOL,
     INTERRUPTED,
     UNKNOWN

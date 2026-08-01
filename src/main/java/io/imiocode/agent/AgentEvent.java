@@ -5,6 +5,7 @@ import io.imiocode.llm.LlmErrorType;
 import io.imiocode.permission.PermissionPrompt;
 import io.imiocode.permission.PermissionReply;
 import io.imiocode.tool.ToolExecutionEvent;
+import io.imiocode.context.ContextEvent;
 
 import java.util.Objects;
 import java.time.Duration;
@@ -152,6 +153,12 @@ public sealed interface AgentEvent {
         public ModeChanged {
             previous = Objects.requireNonNull(previous, "previous 不能为空");
             current = Objects.requireNonNull(current, "current 不能为空");
+        }
+    }
+
+    record ContextChanged(ContextEvent event) implements AgentEvent {
+        public ContextChanged {
+            event = Objects.requireNonNull(event, "event 不能为空");
         }
     }
 

@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -63,6 +64,20 @@ class StreamingTurnExecutorTest {
 
         assertEquals("完成", result.response().text());
         assertEquals(List.of(8_000, 16_000), client.outputLimits);
+    }
+
+    @Test
+    void retryPreservesSystemPromptOverride() throws Exception {
+        ScriptedClient client = new ScriptedClient(LlmErrorType.NETWORK);
+        ChatRequest request = new ChatRequest(
+                List.of(new ChatMessage(MessageRole.USER, "摘要数据")), List.of(),
+                io.imiocode.tool.ToolSelection.only(java.util.Set.of()), OptionalInt.of(1_000),
+                Optional.of("摘要专用提示"));
+
+        executor(client).execute(request, 1, false, new AgentTaskContext(Duration.ofSeconds(10)),
+                new UnknownToolCircuitBreaker(), AgentEventListener.NOOP);
+
+        assertEquals(List.of("摘要专用提示", "摘要专用提示"), client.overrides);
     }
 
     @Test
@@ -136,6 +151,7 @@ class StreamingTurnExecutorTest {
         private final LlmErrorType firstFailure;
         private final AtomicInteger calls = new AtomicInteger();
         private final List<Integer> outputLimits = new ArrayList<>();
+        private final List<String> overrides = new ArrayList<>();
 
         private ScriptedClient(LlmErrorType firstFailure) {
             this.firstFailure = firstFailure;
@@ -146,6 +162,7 @@ class StreamingTurnExecutorTest {
                 throws LlmException {
             int call = calls.incrementAndGet();
             outputLimits.add(request.outputTokenLimit().orElseThrow());
+            overrides.add(request.systemPromptOverride().orElse(""));
             if (call == 1) {
                 listener.onEvent(new LlmEvent.TextDelta("半截"));
                 throw new LlmException(firstFailure, true, null, "可恢复失败");
