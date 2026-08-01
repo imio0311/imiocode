@@ -15,6 +15,7 @@ record ConfigDocument(
         @JsonProperty("max-output-tokens") Integer maxOutputTokens,
         ThinkingDocument thinking,
         AgentDocument agent,
+        ContextDocument context,
         Map<String, ProviderConfig> providers) {
 
     ConfigDocument {
@@ -26,7 +27,7 @@ record ConfigDocument(
     }
 
     static ConfigDocument empty() {
-        return new ConfigDocument(null, null, null, null, null, null, null, Map.of());
+        return new ConfigDocument(null, null, null, null, null, null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -46,6 +47,7 @@ record ConfigDocument(
                 + ", maxOutputTokens=" + maxOutputTokens
                 + ", thinking=" + thinking
                 + ", agent=" + agent
+                + ", context=" + context
                 + ", providers=***]";
     }
 
@@ -61,5 +63,10 @@ record ConfigDocument(
             @JsonProperty("max-iterations") Integer maxIterations,
             @JsonProperty("timeout-seconds") Integer timeoutSeconds,
             @JsonProperty("max-parallel-tools") Integer maxParallelTools) {
+    }
+
+    record ContextDocument(
+            @JsonProperty("window-tokens") Integer windowTokens,
+            @JsonProperty("auto-compact-threshold") Double autoCompactThreshold) {
     }
 }

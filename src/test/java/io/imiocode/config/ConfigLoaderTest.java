@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -44,6 +45,48 @@ class ConfigLoaderTest {
         assertEquals(Duration.ofSeconds(7), config.requestTimeout());
         assertEquals(1234, config.maxOutputTokens());
         assertFalse(config.thinking().enabled());
+        assertEquals(ContextConfig.defaults(), config.context());
+    }
+
+    @Test
+    void loadsContextConfigurationAndEnvironmentOverrides() throws Exception {
+        writeYaml("""
+                provider: openai
+                model: gpt-5
+                max-output-tokens: 4096
+                context:
+                  window-tokens: 32000
+                  auto-compact-threshold: 0.75
+                providers:
+                  openai:
+                    api-key: yaml-secret-key
+                """);
+
+        AppConfig yamlConfig = loader.load(tempDirectory, Map.of());
+        assertEquals(32_000, yamlConfig.context().windowTokens());
+        assertEquals(0.75d, yamlConfig.context().autoCompactThreshold());
+
+        AppConfig environmentConfig = loader.load(tempDirectory, Map.of(
+                "IMIO_CONTEXT_WINDOW_TOKENS", "48000",
+                "IMIO_CONTEXT_AUTO_COMPACT_THRESHOLD", "0.70"));
+        assertEquals(48_000, environmentConfig.context().windowTokens());
+        assertEquals(0.70d, environmentConfig.context().autoCompactThreshold());
+    }
+
+    @Test
+    void rejectsInvalidContextConfiguration() {
+        Map<String, String> invalidWindow = baseEnvironment("openai", "OPENAI_API_KEY");
+        invalidWindow.put("IMIO_CONTEXT_WINDOW_TOKENS", "4096");
+        assertTrue(assertThrows(ConfigException.class,
+                () -> loader.load(tempDirectory, invalidWindow)).getMessage().contains("window-tokens"));
+
+        for (String value : List.of("0", "1", "-1", "NaN", "Infinity", "invalid")) {
+            Map<String, String> invalidThreshold = baseEnvironment("openai", "OPENAI_API_KEY");
+            invalidThreshold.put("IMIO_CONTEXT_AUTO_COMPACT_THRESHOLD", value);
+            assertTrue(assertThrows(ConfigException.class,
+                    () -> loader.load(tempDirectory, invalidThreshold)).getMessage()
+                    .contains("IMIO_CONTEXT_AUTO_COMPACT_THRESHOLD"));
+        }
     }
 
     @Test

@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -81,6 +82,25 @@ class PromptAssemblerTest {
         assertEquals(first.systemPrompt(), second.systemPrompt());
         assertFalse(first.messages().equals(second.messages()));
         assertEquals(CacheIntent.systemOnly(), first.cacheIntent());
+    }
+
+    @Test
+    void usesSystemPromptOverrideAndAllowsEmptyToolSelection() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new StubTool("read"));
+        var assembler = new PromptAssembler(defaultBuilder(), registry);
+        var request = new ChatRequest(
+                List.of(new ChatMessage(MessageRole.USER, "待摘要内容")),
+                List.of(),
+                ToolSelection.only(Set.of()),
+                OptionalInt.of(1024),
+                Optional.of("摘要专用提示"));
+
+        ApiPayload payload = assembler.assembleApiPayload(request);
+
+        assertEquals("摘要专用提示", payload.systemPrompt());
+        assertTrue(payload.tools().isEmpty());
+        assertEquals(CacheIntent.systemOnly(), payload.cacheIntent());
     }
 
     @Test

@@ -45,7 +45,7 @@ public final class PromptAssembler {
                 ? CacheIntent.systemOnly()
                 : CacheIntent.stableChannels();
         return new ApiPayload(
-                systemPrompt,
+                checked.systemPromptOverride().orElse(systemPrompt),
                 messages,
                 tools,
                 cacheIntent,

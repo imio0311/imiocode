@@ -20,13 +20,17 @@ public final class LlmClientFactory {
     }
 
     public LlmClient create(AppConfig config, ToolRegistry tools) {
+        PromptAssembler prompts = new PromptAssembler(
+                SystemPromptBuilder.defaults(),
+                tools);
+        return create(config, prompts);
+    }
+
+    public LlmClient create(AppConfig config, PromptAssembler prompts) {
         HttpClient httpClient = new HttpClientFactory().create(config);
         ObjectMapper objectMapper = new ObjectMapper();
         SseEventReader eventReader = new SseEventReader();
         HttpErrorMapper errorMapper = new HttpErrorMapper();
-        PromptAssembler prompts = new PromptAssembler(
-                SystemPromptBuilder.defaults(),
-                tools);
         return switch (config.provider()) {
             case OPENAI -> new OpenAiClient(
                     config, httpClient, objectMapper, eventReader, errorMapper, prompts);

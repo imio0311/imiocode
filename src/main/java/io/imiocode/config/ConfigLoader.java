@@ -104,11 +104,26 @@ public final class ConfigLoader {
                 AgentConfig.DEFAULT_MAX_PARALLEL_TOOLS,
                 "IMIO_AGENT_MAX_PARALLEL_TOOLS");
         AgentConfig agent = new AgentConfig(maxIterations, taskTimeout, maxParallelTools);
+        ConfigDocument.ContextDocument contextDocument = document.context();
+        int contextWindowTokens = mergePositiveInt(
+                environment.get("IMIO_CONTEXT_WINDOW_TOKENS"),
+                contextDocument == null ? null : contextDocument.windowTokens(),
+                ContextConfig.DEFAULT_WINDOW_TOKENS,
+                "IMIO_CONTEXT_WINDOW_TOKENS");
+        double autoCompactThreshold = mergeThreshold(
+                environment.get("IMIO_CONTEXT_AUTO_COMPACT_THRESHOLD"),
+                contextDocument == null ? null : contextDocument.autoCompactThreshold(),
+                ContextConfig.DEFAULT_AUTO_COMPACT_THRESHOLD,
+                "IMIO_CONTEXT_AUTO_COMPACT_THRESHOLD");
+        if (contextWindowTokens <= maxOutputTokens) {
+            throw new ConfigException("配置项 context.window-tokens 必须大于 max-output-tokens");
+        }
+        ContextConfig context = new ContextConfig(contextWindowTokens, autoCompactThreshold);
 
         try {
             return new AppConfig(
                     provider, model, apiKey, baseUri, connectTimeout, requestTimeout,
-                    maxOutputTokens, thinking, agent);
+                    maxOutputTokens, thinking, agent, context);
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("配置无效：" + exception.getMessage(), exception);
         }
@@ -179,6 +194,35 @@ public final class ConfigLoader {
         }
     }
 
+    private static double mergeThreshold(
+            String environmentValue,
+            Double yamlValue,
+            double defaultValue,
+            String name) {
+        if (environmentValue != null && !environmentValue.isBlank()) {
+            return parseThreshold(environmentValue, name);
+        }
+        if (yamlValue == null) {
+            return defaultValue;
+        }
+        if (!Double.isFinite(yamlValue) || yamlValue <= 0d || yamlValue >= 1d) {
+            throw new ConfigException("config.yaml 配置项 context.auto-compact-threshold 必须在 0 和 1 之间");
+        }
+        return yamlValue;
+    }
+
+    private static double parseThreshold(String value, String name) {
+        try {
+            double parsed = Double.parseDouble(value.trim());
+            if (!Double.isFinite(parsed) || parsed <= 0d || parsed >= 1d) {
+                throw new NumberFormatException("out of range");
+            }
+            return parsed;
+        } catch (NumberFormatException exception) {
+            throw new ConfigException("配置项 " + name + " 必须是 0 和 1 之间的有限小数", exception);
+        }
+    }
+
     private static String yamlName(String environmentName) {
         return switch (environmentName) {
             case "IMIO_CONNECT_TIMEOUT_SECONDS" -> "connect-timeout-seconds";
@@ -188,6 +232,7 @@ public final class ConfigLoader {
             case "IMIO_AGENT_MAX_ITERATIONS" -> "agent.max-iterations";
             case "IMIO_AGENT_TIMEOUT_SECONDS" -> "agent.timeout-seconds";
             case "IMIO_AGENT_MAX_PARALLEL_TOOLS" -> "agent.max-parallel-tools";
+            case "IMIO_CONTEXT_WINDOW_TOKENS" -> "context.window-tokens";
             default -> environmentName;
         };
     }
