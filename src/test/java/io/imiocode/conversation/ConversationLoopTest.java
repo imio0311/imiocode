@@ -24,6 +24,7 @@ import io.imiocode.tool.ToolRegistry;
 import io.imiocode.tool.ToolResult;
 import io.imiocode.tool.ToolRisk;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.time.Duration;
 import java.util.OptionalLong;
 import java.util.concurrent.Executors;
@@ -42,6 +44,28 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConversationLoopTest {
+    @TempDir
+    Path tempDirectory;
+
+    @Test
+    void compactCommandIsHandledLocallyAndRestoresReadyState() {
+        AtomicInteger calls = new AtomicInteger();
+        LlmClient client = new LlmClient() {
+            @Override
+            public ChatResponse streamChat(ChatRequest request, StreamListener listener) {
+                calls.incrementAndGet();
+                return new ChatResponse("不应调用");
+            }
+            @Override public void close() { }
+        };
+        FakeTerminal terminal = new FakeTerminal("/CoMpAcT", "/exit");
+
+        new ConversationLoop(new ConversationSession(client), terminal).run();
+
+        assertEquals(0, calls.get());
+        assertEquals(List.of(UiState.COMPACTING, UiState.READY), terminal.states);
+    }
+
     @Test
     void ignoresBlankInputStreamsResponseAndExits() {
         FakeClient client = new FakeClient();
@@ -149,7 +173,8 @@ class ConversationLoopTest {
                     "surefire.test.class.path", System.getProperty("java.class.path"));
             ProcessBuilder builder = new ProcessBuilder(
                     java, "-cp", classpath, "io.imiocode.ImioCodeApplication");
-            builder.directory(Path.of("").toAbsolutePath().toFile());
+            Files.copy(Path.of("pom.xml").toAbsolutePath(), tempDirectory.resolve("pom.xml"));
+            builder.directory(tempDirectory.toFile());
             builder.redirectErrorStream(true);
             builder.environment().put("IMIO_PROVIDER", "deepseek");
             builder.environment().put("IMIO_MODEL", "deepseek-chat");

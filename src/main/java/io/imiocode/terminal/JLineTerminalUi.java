@@ -10,6 +10,8 @@ import io.imiocode.mcp.manager.McpLaunchRequest;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
+import io.imiocode.context.CompactReport;
+import io.imiocode.context.ContextEvent;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -439,6 +441,43 @@ public final class JLineTerminalUi implements TerminalUi {
     }
 
     @Override
+    public synchronized void showContextEvent(ContextEvent event) {
+        if (closed.get()) return;
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        String line;
+        int color = AttributedStyle.CYAN;
+        if (event instanceof ContextEvent.ResultsOffloaded offloaded) {
+            line = "[上下文] 已落盘 " + offloaded.count() + " 个大结果到 .imiocode/tool-results/";
+        } else if (event instanceof ContextEvent.Started started) {
+            line = "[上下文] 正在压缩，约 " + started.beforeTokens() + " Token";
+        } else if (event instanceof ContextEvent.Completed completed) {
+            line = "[上下文] 压缩完成：" + completed.beforeTokens() + " → " + completed.afterTokens() + " Token";
+            color = AttributedStyle.GREEN;
+        } else if (event instanceof ContextEvent.Failed failed) {
+            line = "[上下文] " + failed.safeMessage();
+            color = AttributedStyle.RED;
+        } else {
+            line = "[上下文] 自动摘要连续失败，当前任务已暂停自动摘要";
+            color = AttributedStyle.YELLOW;
+        }
+        printStyled(line, AttributedStyle.DEFAULT.foreground(color), currentMode());
+        writer.flush();
+    }
+
+    @Override
+    public synchronized void showCompactReport(CompactReport report) {
+        if (closed.get()) return;
+        String line = report.compacted()
+                ? "[上下文] 手动压缩完成：" + report.beforeTokens() + " → " + report.afterTokens()
+                    + " Token，节省 " + Math.round(report.savedRatio() * 100) + "%"
+                : "[上下文] " + report.message();
+        printStyled(line, AttributedStyle.DEFAULT.foreground(
+                report.compacted() ? AttributedStyle.GREEN : AttributedStyle.CYAN), currentMode());
+        writer.flush();
+    }
+
+    @Override
     public synchronized void printError(String message) {
         if (closed.get()) {
             return;
@@ -515,6 +554,7 @@ public final class JLineTerminalUi implements TerminalUi {
             case TOOL_WAITING -> AttributedStyle.YELLOW;
             case TOOL_RUNNING -> AttributedStyle.CYAN;
             case PERMISSION_WAITING -> AttributedStyle.YELLOW;
+            case COMPACTING -> AttributedStyle.YELLOW;
             case ERROR -> AttributedStyle.RED;
         };
         return AttributedStyle.DEFAULT.foreground(color);

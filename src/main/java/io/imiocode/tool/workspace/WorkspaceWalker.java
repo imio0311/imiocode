@@ -53,6 +53,9 @@ public final class WorkspaceWalker {
                     break;
                 }
                 scanned++;
+                if (isToolResultsPath(child)) {
+                    continue;
+                }
                 if (!policy.isAllowedDiscoveredPath(child)) {
                     continue;
                 }
@@ -73,6 +76,12 @@ public final class WorkspaceWalker {
             }
         }
         return new WalkResult(List.copyOf(discovered), scanned, truncated);
+    }
+
+    private boolean isToolResultsPath(Path path) {
+        String relative = policy.relativeUnixPath(path);
+        return relative.equals(".imiocode/tool-results")
+                || relative.startsWith(".imiocode/tool-results/");
     }
 
     private Children sortedChildren(Path directory, int limit) throws IOException {

@@ -87,3 +87,21 @@ rules:
 ```
 
 MCP Header、环境变量值和工具参数不会显示在 stdio 启动确认中。
+# 上下文管理（ch8）
+
+ImioCode 默认按 64,000 Token 上下文窗口工作，在近似预算达到 80% 时自动压缩。估算采用约
+3.5 字符/Token 的稳定近似值，因此它用于预算保护，不等同于 Provider 的精确 tokenizer。
+
+可在 `config.yaml` 中覆盖默认值：
+
+```yaml
+context:
+  window-tokens: 64000
+  auto-compact-threshold: 0.80
+```
+
+环境变量 `IMIO_CONTEXT_WINDOW_TOKENS` 和 `IMIO_CONTEXT_AUTO_COMPACT_THRESHOLD` 的优先级更高。
+在终端输入 `/compact` 可随时强制压缩历史，并显示压缩前后的近似 Token 数。
+
+超过阈值的工具结果会以 UTF-8 写入 `.imiocode/tool-results/`，对话中仅保留预览、相对路径和
+`read_file` 提示。该目录默认被 Git 与常规 Glob 扫描忽略，但模型可以用明确路径读取其中的文件。

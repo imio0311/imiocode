@@ -46,6 +46,10 @@ public final class ConversationLoop {
                 switchMode(AgentMode.DO);
                 continue;
             }
+            if ("/compact".equalsIgnoreCase(trimmed)) {
+                compact();
+                continue;
+            }
 
             terminal.updateState(UiState.THINKING);
             try {
@@ -112,6 +116,8 @@ public final class ConversationLoop {
                             updateStateIfChanged(UiState.TOOL_WAITING);
                         } else if (event instanceof AgentEvent.ModeChanged changed) {
                             terminal.showAgentMode(changed.current());
+                        } else if (event instanceof AgentEvent.ContextChanged changed) {
+                            terminal.showContextEvent(changed.event());
                         } else if (event instanceof AgentEvent.TaskCompleted) {
                             finishLines();
                         } else if (event instanceof AgentEvent.TaskStopped stopped) {
@@ -201,6 +207,25 @@ public final class ConversationLoop {
                 }
             }
         });
+    }
+
+    private void compact() {
+        terminal.updateState(UiState.COMPACTING);
+        try {
+            var report = session.forceCompact(new ConversationListener() {
+                @Override public void onTextDelta(String text) { }
+                @Override public void onAgentEvent(AgentEvent event) {
+                    if (event instanceof AgentEvent.ContextChanged changed) {
+                        terminal.showContextEvent(changed.event());
+                    }
+                }
+            });
+            terminal.showCompactReport(report);
+        } catch (RuntimeException exception) {
+            terminal.printError("上下文压缩失败，原历史已保留");
+        } finally {
+            if (!stopping.get()) terminal.updateState(UiState.READY);
+        }
     }
 
     private void updateStateIfChanged(UiState next) {

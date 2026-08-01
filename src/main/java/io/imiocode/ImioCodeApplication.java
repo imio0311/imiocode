@@ -4,6 +4,13 @@ import io.imiocode.agent.Agent;
 import io.imiocode.config.AppConfig;
 import io.imiocode.config.ConfigException;
 import io.imiocode.config.ConfigLoader;
+import io.imiocode.context.ApproximateTokenEstimator;
+import io.imiocode.context.ContextManager;
+import io.imiocode.context.ConversationSerializer;
+import io.imiocode.context.ConversationSummarizer;
+import io.imiocode.context.SummaryParser;
+import io.imiocode.context.ToolResultOffloader;
+import io.imiocode.context.ToolResultSpillStore;
 import io.imiocode.conversation.ConversationLoop;
 import io.imiocode.conversation.ConversationSession;
 import io.imiocode.llm.LlmClient;
@@ -17,6 +24,8 @@ import io.imiocode.mcp.manager.McpStartupResult;
 import io.imiocode.mcp.transport.McpTransportFactory;
 import io.imiocode.prompt.EnvironmentContextCollector;
 import io.imiocode.prompt.EnvironmentReminderFormatter;
+import io.imiocode.prompt.PromptAssembler;
+import io.imiocode.prompt.SystemPromptBuilder;
 import io.imiocode.permission.PermissionChecker;
 import io.imiocode.permission.PermissionCoordinator;
 import io.imiocode.permission.PermissionGate;
@@ -126,7 +135,16 @@ public final class ImioCodeApplication {
                         + " 个 Server，注册 " + mcpStartup.registeredTools() + " 个工具");
             }
 
-            client = new LlmClientFactory().create(config, registry);
+            PromptAssembler promptAssembler = new PromptAssembler(
+                    SystemPromptBuilder.defaults(), registry);
+            client = new LlmClientFactory().create(config, promptAssembler);
+            ToolResultSpillStore spillStore = new ToolResultSpillStore(workspace, redactor);
+            ToolResultOffloader offloader = new ToolResultOffloader(spillStore, redactor);
+            ConversationSummarizer summarizer = new ConversationSummarizer(
+                    client, new ConversationSerializer(), new SummaryParser());
+            ContextManager contextManager = new ContextManager(
+                    config.context(), config.maxOutputTokens(), promptAssembler,
+                    new ApproximateTokenEstimator(), offloader, summarizer);
             Agent agent = new Agent(
                     client,
                     registry,
@@ -138,7 +156,8 @@ public final class ImioCodeApplication {
                             Duration.ofSeconds(2),
                             config.model()),
                     new EnvironmentReminderFormatter(),
-                    permissionGate);
+                    permissionGate,
+                    contextManager);
             session = new ConversationSession(agent);
             terminal.printInfo("输入 /exit 或 /quit 退出。");
             terminal.printInfo("[权限] 当前模式: "

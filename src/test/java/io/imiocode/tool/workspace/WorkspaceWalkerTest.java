@@ -45,4 +45,21 @@ class WorkspaceWalkerTest {
         assertEquals(1, result.paths().size());
         assertTrue(result.truncated());
     }
+
+    @Test
+    void skipsOnlyInternalToolResultsDirectory() throws Exception {
+        Files.createDirectories(workspace.resolve(".imiocode/tool-results"));
+        Files.writeString(workspace.resolve(".imiocode/tool-results/large.txt"), "secret result");
+        Files.createDirectory(workspace.resolve("tool-results"));
+        Files.writeString(workspace.resolve("tool-results/normal.txt"), "normal");
+        WorkspacePolicy policy = new WorkspacePolicy(workspace);
+
+        List<String> paths = new WorkspaceWalker(policy).walk(workspace, 100, () -> false)
+                .paths().stream().map(policy::relativeUnixPath).toList();
+
+        assertFalse(paths.stream().anyMatch(path -> path.startsWith(".imiocode/tool-results")));
+        assertTrue(paths.contains("tool-results/normal.txt"));
+        assertTrue(Files.readString(policy.resolveExistingFile(".imiocode/tool-results/large.txt"))
+                .contains("secret result"));
+    }
 }

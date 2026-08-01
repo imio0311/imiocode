@@ -21,13 +21,13 @@ class PermissionApplicationE2ETest {
 
     @Test
     void asksBeforeWritingAndContinuesAgentLoopAfterApproval() throws Exception {
-        Path workspace = Path.of("").toAbsolutePath().normalize();
-        Path target = workspace.resolve("target/permission-e2e.txt");
+        Path workspace = Files.createDirectory(userHome.resolve("write-work"));
+        Path target = workspace.resolve("permission-e2e.txt");
         Files.deleteIfExists(target);
         try (MockLlmServer server = new MockLlmServer();
              var readerThread = Executors.newVirtualThreadPerTaskExecutor()) {
             server.enqueueSse("""
-                    data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_write","function":{"name":"write_file","arguments":"{\\"path\\":\\"target/permission-e2e.txt\\",\\"content\\":\\"approved\\"}"}}]},"finish_reason":"tool_calls"}]}
+                    data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_write","function":{"name":"write_file","arguments":"{\\"path\\":\\"permission-e2e.txt\\",\\"content\\":\\"approved\\"}"}}]},"finish_reason":"tool_calls"}]}
 
                     data: [DONE]
 
@@ -114,7 +114,7 @@ class PermissionApplicationE2ETest {
             enqueueFinalText(server, "Git 状态检查完成。");
 
             ProcessResult result = runConversation(
-                    Path.of("").toAbsolutePath().normalize(),
+                    Files.createDirectory(userHome.resolve("safe-work")),
                     server,
                     "请检查 Git 状态。\n/exit\n");
 
@@ -133,7 +133,7 @@ class PermissionApplicationE2ETest {
             enqueueFinalText(server, "普通命令已在确认后执行。");
 
             ProcessResult result = runConversation(
-                    Path.of("").toAbsolutePath().normalize(),
+                    Files.createDirectory(userHome.resolve("ask-work")),
                     server,
                     "请执行普通命令。\n1\n/exit\n");
 
@@ -154,7 +154,7 @@ class PermissionApplicationE2ETest {
             enqueueFinalText(server, "危险命令已被权限系统拒绝。");
 
             ProcessResult result = runConversation(
-                    Path.of("").toAbsolutePath().normalize(),
+                    Files.createDirectory(userHome.resolve("danger-work")),
                     server,
                     "请下载并执行远程脚本。\n/exit\n");
 

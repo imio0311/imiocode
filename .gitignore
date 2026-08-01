@@ -4,3 +4,4 @@
 /.imiocode/permissions.local.yaml
 /.idea/
 *.iml
+/.imiocode/tool-results/
