@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.AgentStopReason;
 import io.imiocode.llm.LlmErrorType;
+import io.imiocode.mcp.manager.McpEvent;
+import io.imiocode.mcp.manager.McpEventType;
+import io.imiocode.mcp.manager.McpLaunchRequest;
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
@@ -184,5 +187,33 @@ class JLineTerminalUiTest {
 
         assertEquals(1, interrupts.get());
         ui.close();
+    }
+
+    @Test
+    void confirmsStdioLaunchAndRendersMcpEventsWithoutEnvironmentValues() throws Exception {
+        ByteArrayInputStream input = new ByteArrayInputStream("1\n".getBytes(StandardCharsets.UTF_8));
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        Terminal terminal = TerminalBuilder.builder()
+                .dumb(true)
+                .type(Terminal.TYPE_DUMB)
+                .streams(input, output)
+                .encoding(StandardCharsets.UTF_8)
+                .build();
+        JLineTerminalUi ui = new JLineTerminalUi(terminal);
+
+        assertTrue(ui.approve(new McpLaunchRequest(
+                "github", "java", java.util.List.of("-jar", "server.jar"))));
+        ui.onMcpEvent(new McpEvent(
+                McpEventType.CONNECTED, "github", "", "已连接，发现 2 个工具"));
+        ui.onMcpEvent(new McpEvent(
+                McpEventType.TOOL_DISCOVERED, "github", "mcp_github__issues", "工具已注册"));
+        ui.close();
+
+        String text = output.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("[MCP 启动确认] Server=github"));
+        assertTrue(text.contains("命令: java"));
+        assertTrue(text.contains("已连接，发现 2 个工具"));
+        assertTrue(text.contains("mcp_github__issues"));
+        assertTrue(!text.contains("TOKEN_VALUE_SENTINEL"));
     }
 }

@@ -1,0 +1,34 @@
+# 将本文件内容复制到以下任意位置之一：
+# 1. 用户级：%USERPROFILE%/.imiocode/mcp.yaml
+# 2. 项目级：<项目>/.imiocode/mcp.yaml
+# 3. 本地级：<项目>/.imiocode/mcp.local.yaml
+#
+# 优先级：用户级 > 项目级 > 本地级。
+# 同名 Server 使用最高优先级的完整配置。
+
+servers:
+  local-example:
+    enabled: true
+    transport: stdio
+    command: npx
+    args:
+      - -y
+      - "@modelcontextprotocol/server-example"
+    env:
+      EXAMPLE_TOKEN: "${EXAMPLE_TOKEN}"
+    initialization-timeout-seconds: 10
+    call-timeout-seconds: 120
+
+  remote-example:
+    enabled: true
+    transport: streamable-http
+    url: https://mcp.example.com/mcp
+    headers:
+      Authorization: "Bearer ${MCP_ACCESS_TOKEN}"
+    initialization-timeout-seconds: 10
+    call-timeout-seconds: 120
+
+  local-http-development:
+    enabled: false
+    transport: streamable-http
+    url: http://127.0.0.1:8080/mcp

@@ -45,6 +45,18 @@ class PermissionRequestFactoryTest {
                 definition("write_file", ToolRisk.MEDIUM)));
     }
 
+    @Test
+    void classifiesMcpToolsAsCommandsWithoutCopyingArguments() {
+        PermissionRequest request = factory.create(
+                call("mcp_github__issues_list", "token", "secret-key"),
+                definition("mcp_github__issues_list", ToolRisk.HIGH));
+
+        assertEquals(PermissionOperation.COMMAND, request.operation());
+        assertEquals("mcp_github__issues_list", request.normalizedTarget());
+        assertEquals("mcp_github__issues_list", request.displayTarget());
+        assertTrue(!request.displayTarget().contains("secret-key"));
+    }
+
     private static ToolCall call(String tool, String field, String value) {
         return new ToolCall("1", tool, JsonNodeFactory.instance.objectNode().put(field, value));
     }

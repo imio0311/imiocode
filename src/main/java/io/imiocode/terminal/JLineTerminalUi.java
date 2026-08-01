@@ -5,6 +5,8 @@ import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.AgentStopReason;
 import io.imiocode.permission.PermissionPrompt;
 import io.imiocode.permission.PermissionReply;
+import io.imiocode.mcp.manager.McpEvent;
+import io.imiocode.mcp.manager.McpLaunchRequest;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
@@ -291,6 +293,74 @@ public final class JLineTerminalUi implements TerminalUi {
             }
         }
         return PermissionReply.DENY;
+    }
+
+    @Override
+    public synchronized boolean approve(McpLaunchRequest request) {
+        Objects.requireNonNull(request, "request 不能为空");
+        if (closed.get()) {
+            return false;
+        }
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        TerminalMode mode = currentMode();
+        printStyled(
+                "[MCP 启动确认] Server=" + request.serverName(),
+                AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW),
+                mode);
+        writer.println("命令: " + request.command());
+        writer.println("参数: " + String.join(" ", request.args()));
+        writer.println("[1] 允许启动  [2] 拒绝");
+        writer.flush();
+        while (!closed.get()) {
+            try {
+                String answer = lineReader.readLine(styledPrompt("选择> ", mode));
+                if (answer == null) {
+                    return false;
+                }
+                switch (answer.trim().toLowerCase(java.util.Locale.ROOT)) {
+                    case "1", "yes", "y", "allow" -> {
+                        return true;
+                    }
+                    case "2", "no", "n", "deny" -> {
+                        return false;
+                    }
+                    default -> {
+                        writer.println("请输入 1 或 2。");
+                        writer.flush();
+                    }
+                }
+            } catch (UserInterruptException exception) {
+                interruptHandler.get().run();
+                return false;
+            } catch (EndOfFileException exception) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public synchronized void onMcpEvent(McpEvent event) {
+        if (closed.get()) {
+            return;
+        }
+        String prefix = "[MCP/" + event.serverName() + "] ";
+        String text = switch (event.type()) {
+            case WAITING_FOR_APPROVAL -> "等待启动确认";
+            case APPROVED -> "已批准启动";
+            case DENIED -> "已拒绝启动";
+            case CONNECTING -> "正在连接";
+            case CONNECTED -> event.safeMessage();
+            case TOOL_DISCOVERED -> "已注册工具 " + event.toolName();
+            case SERVER_FAILED -> "连接失败: " + event.safeMessage();
+            case CLOSED -> "连接已关闭";
+        };
+        if (event.type() == io.imiocode.mcp.manager.McpEventType.SERVER_FAILED) {
+            printError(prefix + text);
+        } else {
+            printInfo(prefix + text);
+        }
     }
 
     @Override

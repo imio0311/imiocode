@@ -2,6 +2,8 @@ package io.imiocode.tool;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -16,6 +18,7 @@ public final class SecretRedactor {
             "(?i).*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL).*");
 
     private final String apiKey;
+    private final Set<String> dynamicSecrets = ConcurrentHashMap.newKeySet();
 
     public SecretRedactor(String apiKey) {
         this.apiKey = apiKey == null ? "" : apiKey;
@@ -29,8 +32,20 @@ public final class SecretRedactor {
         if (!apiKey.isBlank()) {
             redacted = redacted.replace(apiKey, REDACTED);
         }
+        for (String secret : dynamicSecrets.stream()
+                .sorted((left, right) -> Integer.compare(right.length(), left.length()))
+                .toList()) {
+            redacted = redacted.replace(secret, REDACTED);
+        }
         redacted = replaceSecret(BEARER, redacted);
         return replaceSecret(API_KEY_HEADER, redacted);
+    }
+
+    /** 注册运行期从配置占位符展开出的秘密，后续所有输出统一脱敏。 */
+    public void registerSecret(String secret) {
+        if (secret != null && !secret.isBlank()) {
+            dynamicSecrets.add(secret);
+        }
     }
 
     public boolean isSensitiveEnvironmentName(String name) {

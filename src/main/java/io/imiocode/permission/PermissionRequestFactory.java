@@ -31,12 +31,14 @@ public final class PermissionRequestFactory {
         Objects.requireNonNull(call, "call 不能为空");
         Objects.requireNonNull(definition, "definition 不能为空");
         String toolName = call.name().toLowerCase(Locale.ROOT);
-        PermissionOperation operation = OPERATIONS.get(toolName);
+        PermissionOperation operation = toolName.startsWith("mcp_")
+                ? PermissionOperation.COMMAND
+                : OPERATIONS.get(toolName);
         if (operation == null) {
             throw new IllegalArgumentException("不支持的权限工具: " + call.name());
         }
         ObjectNode arguments = call.arguments();
-        String rawTarget = switch (toolName) {
+        String rawTarget = toolName.startsWith("mcp_") ? call.name() : switch (toolName) {
             case "bash" -> requireText(arguments, "command");
             case "glob" -> requireText(arguments, "pattern");
             case "grep" -> optionalText(arguments, "path", ".");

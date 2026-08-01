@@ -7,8 +7,12 @@ import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.llm.TokenUsage;
 import io.imiocode.permission.PermissionPrompt;
 import io.imiocode.permission.PermissionReply;
+import io.imiocode.mcp.manager.McpEvent;
+import io.imiocode.mcp.manager.McpEventListener;
+import io.imiocode.mcp.manager.McpLaunchApprover;
+import io.imiocode.mcp.manager.McpLaunchRequest;
 
-public interface TerminalUi extends AutoCloseable {
+public interface TerminalUi extends AutoCloseable, McpLaunchApprover, McpEventListener {
     void showWelcome(UiContext context);
 
     void updateState(UiState state);
@@ -40,6 +44,15 @@ public interface TerminalUi extends AutoCloseable {
 
     default PermissionReply confirmPermission(PermissionPrompt prompt) {
         return PermissionReply.DENY;
+    }
+
+    @Override
+    default boolean approve(McpLaunchRequest request) {
+        return false;
+    }
+
+    @Override
+    default void onMcpEvent(McpEvent event) {
     }
 
     default void showPermissionResolved(PermissionReply reply) {

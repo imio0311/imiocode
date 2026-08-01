@@ -8,6 +8,13 @@ import io.imiocode.conversation.ConversationLoop;
 import io.imiocode.conversation.ConversationSession;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmClientFactory;
+import io.imiocode.mcp.config.McpConfigError;
+import io.imiocode.mcp.config.McpConfigLoadResult;
+import io.imiocode.mcp.config.McpConfigLoader;
+import io.imiocode.mcp.jsonrpc.JsonRpcCodec;
+import io.imiocode.mcp.manager.McpManager;
+import io.imiocode.mcp.manager.McpStartupResult;
+import io.imiocode.mcp.transport.McpTransportFactory;
 import io.imiocode.prompt.EnvironmentContextCollector;
 import io.imiocode.prompt.EnvironmentReminderFormatter;
 import io.imiocode.permission.PermissionChecker;
@@ -56,11 +63,20 @@ public final class ImioCodeApplication {
         LlmClient client = null;
         ConversationSession session = null;
         TerminalUi terminal = null;
+        McpManager mcpManager = null;
         try {
             Path workspace = Path.of("").toAbsolutePath().normalize();
             AppConfig config = new ConfigLoader().load(workspace, System.getenv());
             ToolLimits limits = ToolLimits.defaults();
             SecretRedactor redactor = new SecretRedactor(config.apiKey());
+            terminal = new JLineTerminalUi(redactor);
+            String version = VersionResolver.resolve();
+            terminal.showWelcome(new UiContext(
+                    "ImioCode",
+                    version,
+                    config.provider().configValue(),
+                    config.model(),
+                    workspace));
             WorkspacePolicy policy = new WorkspacePolicy(workspace);
             PermissionSettings permissionSettings = new PermissionRuleLoader().load(
                     workspace,
@@ -86,6 +102,30 @@ public final class ImioCodeApplication {
             registry.register(new GlobTool(policy, limits, redactor));
             registry.register(new GrepTool(policy, limits, redactor));
 
+            McpConfigLoadResult mcpConfigs = new McpConfigLoader().load(
+                    workspace,
+                    Path.of(System.getProperty("user.home")).toAbsolutePath().normalize(),
+                    System.getenv(),
+                    redactor);
+            for (McpConfigError error : mcpConfigs.errors()) {
+                terminal.printError(formatMcpError(error));
+            }
+            mcpManager = new McpManager(
+                    new McpTransportFactory(new JsonRpcCodec()),
+                    terminal,
+                    terminal,
+                    limits,
+                    redactor,
+                    version);
+            McpStartupResult mcpStartup = mcpManager.start(mcpConfigs.servers().values(), registry);
+            for (McpConfigError error : mcpStartup.errors()) {
+                terminal.printError(formatMcpError(error));
+            }
+            if (!mcpConfigs.servers().isEmpty() || !mcpConfigs.errors().isEmpty()) {
+                terminal.printInfo("[MCP] 已连接 " + mcpStartup.connectedServers()
+                        + " 个 Server，注册 " + mcpStartup.registeredTools() + " 个工具");
+            }
+
             client = new LlmClientFactory().create(config, registry);
             Agent agent = new Agent(
                     client,
@@ -100,13 +140,6 @@ public final class ImioCodeApplication {
                     new EnvironmentReminderFormatter(),
                     permissionGate);
             session = new ConversationSession(agent);
-            terminal = new JLineTerminalUi(redactor);
-            terminal.showWelcome(new UiContext(
-                    "ImioCode",
-                    VersionResolver.resolve(),
-                    config.provider().configValue(),
-                    config.model(),
-                    workspace));
             terminal.printInfo("输入 /exit 或 /quit 退出。");
             terminal.printInfo("[权限] 当前模式: "
                     + permissionSettings.mode().name().toLowerCase(java.util.Locale.ROOT));
@@ -123,14 +156,22 @@ public final class ImioCodeApplication {
             System.err.println("[运行错误] ImioCode 无法继续运行");
             return 1;
         } finally {
-            if (terminal != null) {
-                terminal.close();
-            }
             if (session != null) {
                 session.close();
             } else if (client != null) {
                 client.close();
             }
+            if (mcpManager != null) {
+                mcpManager.close();
+            }
+            if (terminal != null) {
+                terminal.close();
+            }
         }
+    }
+
+    private static String formatMcpError(McpConfigError error) {
+        String server = error.serverName().isBlank() ? "" : "/" + error.serverName();
+        return "[MCP" + server + "] " + error.safeMessage();
     }
 }
