@@ -58,6 +58,9 @@ context:
   window-tokens: 64000
   auto-compact-threshold: 0.80
 
+ui:
+  verbosity: compact
+
 providers:
   openai:
     api-key: ${OPENAI_API_KEY}
@@ -88,7 +91,7 @@ permissions:
       tool: mcp_context7__resolve-library-id
 ```
 
-只需要保留当前项目实际使用的区域。`mcp: {}` 表示明确不启用 MCP，`permissions: {}` 表示使用安全默认模式 `ask` 且没有自定义规则。
+只需要保留当前项目实际使用的区域。`ui` 缺失时默认使用 `compact`；也可设为 `verbose` 查看状态、Thinking、Usage 和完整工具生命周期。运行中可用 `/verbose` 和 `/compact-ui` 临时切换，这不会修改配置或会话历史。精简模式仍完整显示最终回答、权限确认和错误。`mcp: {}` 表示明确不启用 MCP，`permissions: {}` 表示使用安全默认模式 `ask` 且没有自定义规则。
 
 ## 从旧 MCP 文件迁移
 

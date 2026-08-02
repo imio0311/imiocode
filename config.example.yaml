@@ -31,6 +31,10 @@ context:
   window-tokens: 64000
   auto-compact-threshold: 0.80
 
+ui:
+  # compact：默认精简输出；verbose：显示状态、Thinking、Usage 和完整工具生命周期
+  verbosity: compact
+
 mcp:
   servers:
     context7:

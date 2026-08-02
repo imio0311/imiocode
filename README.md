@@ -19,6 +19,17 @@ $env:DEEPSEEK_API_KEY="你的密钥"
 
 环境变量直接覆盖仍保持最高优先级。配置中的敏感值也可以使用 `${NAME}` 引用，避免把明文凭据写进项目文件。
 
+## 终端显示模式
+
+默认使用精简模式，只展示简短启动信息、最终工具结果、完整模型回答以及必须处理的权限和错误信息：
+
+```yaml
+ui:
+  verbosity: compact
+```
+
+如需查看状态变化、Thinking、Token Usage 和完整工具生命周期，可将值改为 `verbose`。运行中输入 `/verbose` 可临时切到详细模式，输入 `/compact-ui` 切回精简模式；这两个命令只改变当前进程的显示，不会调用模型、写入会话历史或修改 `config.yaml`。精简模式不会截断最终回答，也不会隐藏权限确认和错误。
+
 ## MCP Server 配置
 
 MCP Server 放在根配置的 `mcp.servers` 下。修改配置或 Server 工具后需要重启 ImioCode。
