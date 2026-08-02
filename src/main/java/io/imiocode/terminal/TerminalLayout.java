@@ -1,5 +1,6 @@
 package io.imiocode.terminal;
 
+import io.imiocode.config.UiVerbosity;
 import org.jline.utils.AttributedString;
 
 import java.util.ArrayList;
@@ -16,10 +17,23 @@ public final class TerminalLayout {
             " |___|_| |_| |_|_|\\___/ \\____\\___/ \\__,_|\\___|");
 
     public List<String> welcome(UiContext context, UiState state, int requestedWidth, TerminalMode mode) {
+        return welcome(context, state, requestedWidth, mode, UiVerbosity.VERBOSE);
+    }
+
+    public List<String> welcome(
+            UiContext context,
+            UiState state,
+            int requestedWidth,
+            TerminalMode mode,
+            UiVerbosity verbosity) {
         Objects.requireNonNull(context, "context");
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(mode, "mode");
+        Objects.requireNonNull(verbosity, "verbosity");
         int width = normalizeWidth(requestedWidth);
+        if (verbosity == UiVerbosity.COMPACT) {
+            return compactWelcome(context, width, mode);
+        }
         if (mode == TerminalMode.PLAIN) {
             return plainWelcome(context, state, width);
         }
@@ -41,6 +55,13 @@ public final class TerminalLayout {
     }
 
     public String inputTop(int requestedWidth, TerminalMode mode) {
+        return inputTop(requestedWidth, mode, UiVerbosity.VERBOSE);
+    }
+
+    public String inputTop(int requestedWidth, TerminalMode mode, UiVerbosity verbosity) {
+        if (verbosity == UiVerbosity.COMPACT) {
+            return "";
+        }
         int width = normalizeWidth(requestedWidth);
         if (mode == TerminalMode.PLAIN) {
             return "";
@@ -49,16 +70,43 @@ public final class TerminalLayout {
     }
 
     public String primaryPrompt(TerminalMode mode) {
+        return primaryPrompt(mode, UiVerbosity.VERBOSE);
+    }
+
+    public String primaryPrompt(TerminalMode mode, UiVerbosity verbosity) {
+        if (verbosity == UiVerbosity.COMPACT) {
+            return mode == TerminalMode.PLAIN ? "> " : "› ";
+        }
         return mode == TerminalMode.PLAIN ? "You> " : "│ › ";
     }
 
     public String continuationPrompt(TerminalMode mode) {
+        return continuationPrompt(mode, UiVerbosity.VERBOSE);
+    }
+
+    public String continuationPrompt(TerminalMode mode, UiVerbosity verbosity) {
+        if (verbosity == UiVerbosity.COMPACT) {
+            return "  ";
+        }
         return mode == TerminalMode.PLAIN ? "> " : "│   ";
     }
 
     public String statusLine(UiContext context, UiState state, int requestedWidth, TerminalMode mode) {
+        return statusLine(context, state, requestedWidth, mode, UiVerbosity.VERBOSE);
+    }
+
+    public String statusLine(
+            UiContext context,
+            UiState state,
+            int requestedWidth,
+            TerminalMode mode,
+            UiVerbosity verbosity) {
         Objects.requireNonNull(context, "context");
         Objects.requireNonNull(state, "state");
+        Objects.requireNonNull(verbosity, "verbosity");
+        if (verbosity == UiVerbosity.COMPACT) {
+            return "";
+        }
         int width = normalizeWidth(requestedWidth);
         String left = mode == TerminalMode.PLAIN
                 ? "chat · " + state.label()
@@ -99,6 +147,17 @@ public final class TerminalLayout {
                 truncate(context.provider() + " | " + context.model(), width),
                 truncate("目录: " + context.workingDirectory(), width),
                 truncate("状态: " + state.label(), width));
+    }
+
+    private static List<String> compactWelcome(
+            UiContext context,
+            int width,
+            TerminalMode mode) {
+        String separator = mode == TerminalMode.PLAIN ? " | " : " · ";
+        return List.of(
+                truncate(context.productName() + " v" + context.version(), width),
+                truncate(context.provider() + separator + context.model(), width),
+                truncate(context.workingDirectory().toString(), width));
     }
 
     private static String topBorder(int width) {

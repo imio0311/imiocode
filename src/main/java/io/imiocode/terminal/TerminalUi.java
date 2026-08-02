@@ -13,6 +13,7 @@ import io.imiocode.mcp.manager.McpLaunchApprover;
 import io.imiocode.mcp.manager.McpLaunchRequest;
 import io.imiocode.context.CompactReport;
 import io.imiocode.context.ContextEvent;
+import io.imiocode.config.UiVerbosity;
 
 public interface TerminalUi extends AutoCloseable, McpLaunchApprover, McpEventListener {
     void showWelcome(UiContext context);
@@ -20,6 +21,19 @@ public interface TerminalUi extends AutoCloseable, McpLaunchApprover, McpEventLi
     void updateState(UiState state);
 
     UiState state();
+
+    default UiVerbosity verbosity() {
+        return UiVerbosity.COMPACT;
+    }
+
+    default void setVerbosity(UiVerbosity verbosity) {
+    }
+
+    default void showVerbosityChanged(UiVerbosity verbosity) {
+        printInfo(verbosity == UiVerbosity.VERBOSE
+                ? "[UI] 已切换为详细模式"
+                : "[UI] 已切换为精简模式");
+    }
 
     String readLine(String prompt);
 

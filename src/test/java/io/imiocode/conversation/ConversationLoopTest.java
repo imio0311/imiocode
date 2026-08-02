@@ -3,6 +3,7 @@ package io.imiocode.conversation;
 import io.imiocode.agent.AgentMode;
 import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.PlanModePrompt;
+import io.imiocode.config.UiVerbosity;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmEvent;
@@ -64,6 +65,23 @@ class ConversationLoopTest {
 
         assertEquals(0, calls.get());
         assertEquals(List.of(UiState.COMPACTING, UiState.READY), terminal.states);
+    }
+
+    @Test
+    void uiVerbosityCommandsAreHandledLocallyWithoutChangingAgentMode() {
+        FakeClient client = new FakeClient();
+        FakeTerminal terminal = new FakeTerminal(
+                "/VeRbOsE", "/compact-ui", "/verbose", "/exit");
+
+        new ConversationLoop(new ConversationSession(client), terminal).run();
+
+        assertEquals(0, client.calls);
+        assertEquals(List.of(
+                UiVerbosity.VERBOSE,
+                UiVerbosity.COMPACT,
+                UiVerbosity.VERBOSE), terminal.verbosityChanges);
+        assertEquals(UiVerbosity.VERBOSE, terminal.verbosity());
+        assertEquals(List.of(), terminal.agentModes);
     }
 
     @Test
@@ -196,12 +214,10 @@ class ConversationLoopTest {
                 assertTrue(process.waitFor(20, TimeUnit.SECONDS), "应用进程未在时限内退出");
                 String output = outputFuture.get(2, TimeUnit.SECONDS);
                 assertEquals(0, process.exitValue(), output);
-                assertTrue(output.contains("read_file"), output);
-                assertTrue(output.contains("LOW"), output);
-                assertTrue(output.contains("[thinking] 先查看项目"), output);
-                assertTrue(output.contains("[thinking] 总结结果"), output);
-                assertTrue(output.contains("[usage] input=10 · output=4 · reasoning=2"), output);
-                assertTrue(output.contains("[usage] input=20 · output=6 · reasoning=2"), output);
+                assertTrue(output.contains("[ok] Read pom.xml"), output);
+                assertTrue(!output.contains("LOW"), output);
+                assertTrue(!output.contains("[thinking]"), output);
+                assertTrue(!output.contains("[usage]"), output);
                 assertTrue(output.contains("项目使用 Java 21。"), output);
                 String firstRequest = server.takeRequest().body();
                 assertTrue(firstRequest.contains("\"tools\""));
@@ -211,6 +227,71 @@ class ConversationLoopTest {
                 assertTrue(followUp.contains("\"role\":\"tool\""));
                 assertTrue(followUp.contains("maven.compiler.release"));
                 assertTrue(followUp.contains("\"reasoning_content\":\"先查看项目\""));
+            } finally {
+                if (process.isAlive()) {
+                    process.destroyForcibly();
+                }
+            }
+        }
+    }
+
+    @Test
+    void applicationProcessSwitchesUiVerbosityWithoutExtraModelTurns() throws Exception {
+        try (MockLlmServer server = new MockLlmServer();
+             var readerThread = Executors.newVirtualThreadPerTaskExecutor()) {
+            server.enqueueSse("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"inspect\","
+                    + "\"tool_calls\":["
+                    + "{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\","
+                    + "\"arguments\":\"{\\\"path\\\":\\\"pom.xml\\\"}\"}}]},"
+                    + "\"finish_reason\":\"tool_calls\"}],"
+                    + "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n"
+                    + "data: [DONE]\n\n");
+            server.enqueueSse("data: {\"choices\":[{\"delta\":{\"content\":\"done\"},"
+                    + "\"finish_reason\":\"stop\"}],"
+                    + "\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":2}}\n\n"
+                    + "data: [DONE]\n\n");
+            String java = Path.of(System.getProperty("java.home"), "bin",
+                    System.getProperty("os.name").toLowerCase().contains("win") ? "java.exe" : "java")
+                    .toString();
+            String classpath = System.getProperty(
+                    "surefire.test.class.path", System.getProperty("java.class.path"));
+            ProcessBuilder builder = new ProcessBuilder(
+                    java, "-cp", classpath, "io.imiocode.ImioCodeApplication");
+            Files.copy(Path.of("pom.xml").toAbsolutePath(), tempDirectory.resolve("pom.xml"));
+            builder.directory(tempDirectory.toFile());
+            builder.redirectErrorStream(true);
+            builder.environment().put("IMIO_PROVIDER", "deepseek");
+            builder.environment().put("IMIO_MODEL", "deepseek-chat");
+            builder.environment().put("DEEPSEEK_API_KEY", "local-test-key");
+            builder.environment().put("DEEPSEEK_BASE_URL", server.baseUri().toString());
+            builder.environment().put("IMIO_THINKING_ENABLED", "true");
+            Process process = builder.start();
+            try {
+                var outputFuture = readerThread.submit(
+                        () -> new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+                try (OutputStreamWriter input =
+                             new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8)) {
+                    input.write("/verbose\n");
+                    input.write("read pom.xml\n");
+                    input.write("/compact-ui\n");
+                    input.write("/exit\n");
+                    input.flush();
+                }
+
+                assertTrue(process.waitFor(20, TimeUnit.SECONDS), "应用进程未在时限内退出");
+                String output = outputFuture.get(2, TimeUnit.SECONDS);
+                assertEquals(0, process.exitValue(), output);
+                assertTrue(output.contains("[UI] 详细模式"), output);
+                assertTrue(output.contains("[thinking] inspect"), output);
+                assertTrue(output.contains("[usage] input=7 · output=3"), output);
+                assertTrue(output.contains("read_file"), output);
+                assertTrue(output.contains("LOW"), output);
+                assertTrue(output.contains("queued"), output);
+                assertTrue(output.contains("running"), output);
+                assertTrue(output.contains("done"), output);
+                assertTrue(output.contains("[UI] 精简模式"), output);
+                server.takeRequest();
+                server.takeRequest();
             } finally {
                 if (process.isAlive()) {
                     process.destroyForcibly();
@@ -396,6 +477,7 @@ class ConversationLoopTest {
         private final List<TokenUsage> usages = new ArrayList<>();
         private final List<String> richActions = new ArrayList<>();
         private final List<AgentMode> agentModes = new ArrayList<>();
+        private final List<UiVerbosity> verbosityChanges = new ArrayList<>();
         private final List<AgentEvent.RetryScheduled> retries = new ArrayList<>();
         private int beginCount;
         private int endCount;
@@ -403,6 +485,7 @@ class ConversationLoopTest {
         private boolean thinkingOpen;
         private Runnable interruptHandler;
         private UiState state = UiState.READY;
+        private UiVerbosity verbosity = UiVerbosity.COMPACT;
 
         private FakeTerminal(String... inputs) {
             this.inputs = new ArrayDeque<>(List.of(inputs));
@@ -421,6 +504,21 @@ class ConversationLoopTest {
         @Override
         public UiState state() {
             return state;
+        }
+
+        @Override
+        public UiVerbosity verbosity() {
+            return verbosity;
+        }
+
+        @Override
+        public void setVerbosity(UiVerbosity verbosity) {
+            this.verbosity = verbosity;
+        }
+
+        @Override
+        public void showVerbosityChanged(UiVerbosity verbosity) {
+            verbosityChanges.add(verbosity);
         }
 
         @Override

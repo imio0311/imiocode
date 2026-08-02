@@ -3,6 +3,7 @@ package io.imiocode.conversation;
 import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.AgentMode;
 import io.imiocode.agent.AgentStopReason;
+import io.imiocode.config.UiVerbosity;
 import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiState;
 import io.imiocode.tool.ToolExecutionEvent;
@@ -48,6 +49,14 @@ public final class ConversationLoop {
             }
             if ("/compact".equalsIgnoreCase(trimmed)) {
                 compact();
+                continue;
+            }
+            if ("/verbose".equalsIgnoreCase(trimmed)) {
+                switchVerbosity(UiVerbosity.VERBOSE);
+                continue;
+            }
+            if ("/compact-ui".equalsIgnoreCase(trimmed)) {
+                switchVerbosity(UiVerbosity.COMPACT);
                 continue;
             }
 
@@ -226,6 +235,11 @@ public final class ConversationLoop {
         } finally {
             if (!stopping.get()) terminal.updateState(UiState.READY);
         }
+    }
+
+    private void switchVerbosity(UiVerbosity verbosity) {
+        terminal.setVerbosity(verbosity);
+        terminal.showVerbosityChanged(verbosity);
     }
 
     private void updateStateIfChanged(UiState next) {

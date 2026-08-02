@@ -6,6 +6,7 @@ import io.imiocode.config.ConfigException;
 import io.imiocode.config.ConfigLoader;
 import io.imiocode.config.ConfigNotice;
 import io.imiocode.config.RuntimeConfig;
+import io.imiocode.config.UiVerbosity;
 import io.imiocode.context.ApproximateTokenEstimator;
 import io.imiocode.context.ContextManager;
 import io.imiocode.context.ConversationSerializer;
@@ -81,7 +82,7 @@ public final class ImioCodeApplication {
             AppConfig config = runtimeConfig.app();
             ToolLimits limits = ToolLimits.defaults();
             SecretRedactor redactor = runtimeConfig.redactor();
-            terminal = new JLineTerminalUi(redactor);
+            terminal = new JLineTerminalUi(redactor, config.ui().verbosity());
             String version = VersionResolver.resolve();
             terminal.showWelcome(new UiContext(
                     "ImioCode",
@@ -159,9 +160,15 @@ public final class ImioCodeApplication {
                     permissionGate,
                     contextManager);
             session = new ConversationSession(agent);
-            terminal.printInfo("输入 /exit 或 /quit 退出。");
-            terminal.printInfo("[权限] 当前模式: "
-                    + permissionSettings.mode().name().toLowerCase(java.util.Locale.ROOT));
+            String permissionMode = permissionSettings.mode().name()
+                    .toLowerCase(java.util.Locale.ROOT);
+            if (config.ui().verbosity() == UiVerbosity.COMPACT) {
+                terminal.printInfo("[权限] " + permissionMode
+                        + " · /verbose 查看详细过程 · /exit 退出");
+            } else {
+                terminal.printInfo("输入 /exit 或 /quit 退出。");
+                terminal.printInfo("[权限] 当前模式: " + permissionMode);
+            }
 
             new ConversationLoop(session, terminal).run();
             return 0;

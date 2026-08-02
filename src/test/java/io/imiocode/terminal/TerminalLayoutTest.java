@@ -1,5 +1,6 @@
 package io.imiocode.terminal;
 
+import io.imiocode.config.UiVerbosity;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -28,7 +29,7 @@ class TerminalLayoutTest {
 
     @Test
     void everyRenderedLineFitsTerminalWidth() {
-        for (int width : List.of(20, 40, 60, 100)) {
+        for (int width : List.of(20, 40, 60, 80, 100, 200)) {
             TerminalMode mode = TerminalMode.select(width, true);
             List<String> lines = layout.welcome(context, UiState.READY, width, mode);
             lines.forEach(line -> assertTrue(
@@ -62,5 +63,46 @@ class TerminalLayoutTest {
         assertTrue(plain.contains("Error"));
         assertTrue(layout.statusLine(shortContext, UiState.TOOL_WAITING, 100, TerminalMode.PLAIN)
                 .contains("Tool waiting"));
+    }
+
+    @Test
+    void compactVerbosityUsesThreeCoreLinesAndShortPrompts() {
+        UiContext shortContext = new UiContext(
+                "ImioCode", "dev", "deepseek", "deepseek-chat", Path.of("work"));
+
+        for (TerminalMode mode : TerminalMode.values()) {
+            List<String> welcome = layout.welcome(
+                    shortContext, UiState.READY, 100, mode, UiVerbosity.COMPACT);
+            assertEquals(3, welcome.size());
+            String text = String.join("\n", welcome);
+            assertTrue(text.contains("ImioCode vdev"));
+            assertTrue(text.contains("deepseek"));
+            assertTrue(text.contains("deepseek-chat"));
+            assertTrue(text.contains("work"));
+            assertTrue(!text.contains("Status"));
+            assertTrue(!text.contains("Ready"));
+            assertEquals("", layout.inputTop(100, mode, UiVerbosity.COMPACT));
+            assertEquals("", layout.statusLine(
+                    shortContext, UiState.THINKING, 100, mode, UiVerbosity.COMPACT));
+        }
+        assertEquals("> ", layout.primaryPrompt(TerminalMode.PLAIN, UiVerbosity.COMPACT));
+        assertEquals("› ", layout.primaryPrompt(TerminalMode.FULL, UiVerbosity.COMPACT));
+    }
+
+    @Test
+    void compactAndVerboseLayoutsFitEverySupportedWidth() {
+        for (int width : List.of(20, 40, 60, 80, 100, 200)) {
+            TerminalMode mode = TerminalMode.select(width, true);
+            for (UiVerbosity verbosity : UiVerbosity.values()) {
+                layout.welcome(context, UiState.READY, width, mode, verbosity)
+                        .forEach(line -> assertTrue(
+                                TerminalLayout.columns(line) <= width,
+                                () -> verbosity + " 宽度 " + width + " 越界: " + line));
+                assertTrue(TerminalLayout.columns(
+                        layout.inputTop(width, mode, verbosity)) <= width);
+                assertTrue(TerminalLayout.columns(layout.statusLine(
+                        context, UiState.STREAMING, width, mode, verbosity)) <= width);
+            }
+        }
     }
 }

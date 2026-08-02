@@ -12,6 +12,7 @@ import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
 import io.imiocode.context.CompactReport;
 import io.imiocode.context.ContextEvent;
+import io.imiocode.config.UiVerbosity;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -38,6 +39,7 @@ public final class JLineTerminalUi implements TerminalUi {
     private final UsageFormatter usageFormatter = new UsageFormatter();
     private final AtomicReference<Runnable> interruptHandler = new AtomicReference<>(() -> { });
     private final AtomicReference<UiState> state = new AtomicReference<>(UiState.READY);
+    private final AtomicReference<UiVerbosity> verbosity;
     private final AtomicBoolean closed = new AtomicBoolean();
     private UiContext context;
     private boolean assistantLineOpen;
@@ -45,31 +47,56 @@ public final class JLineTerminalUi implements TerminalUi {
 
     public JLineTerminalUi() throws IOException {
         this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build(),
-                new SecretRedactor(""));
+                new SecretRedactor(""), UiVerbosity.COMPACT);
     }
 
     public JLineTerminalUi(SecretRedactor redactor) throws IOException {
         this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build(),
-                redactor);
+                redactor, UiVerbosity.COMPACT);
+    }
+
+    public JLineTerminalUi(SecretRedactor redactor, UiVerbosity verbosity) throws IOException {
+        this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build(),
+                redactor, verbosity);
     }
 
     JLineTerminalUi(Terminal terminal) {
-        this(terminal, LineReaderBuilder.builder().terminal(terminal).build(), new SecretRedactor(""));
+        this(terminal, LineReaderBuilder.builder().terminal(terminal).build(),
+                new SecretRedactor(""), UiVerbosity.COMPACT);
+    }
+
+    JLineTerminalUi(Terminal terminal, UiVerbosity verbosity) {
+        this(terminal, LineReaderBuilder.builder().terminal(terminal).build(),
+                new SecretRedactor(""), verbosity);
     }
 
     JLineTerminalUi(Terminal terminal, SecretRedactor redactor) {
-        this(terminal, LineReaderBuilder.builder().terminal(terminal).build(), redactor);
+        this(terminal, LineReaderBuilder.builder().terminal(terminal).build(),
+                redactor, UiVerbosity.COMPACT);
+    }
+
+    JLineTerminalUi(Terminal terminal, SecretRedactor redactor, UiVerbosity verbosity) {
+        this(terminal, LineReaderBuilder.builder().terminal(terminal).build(), redactor, verbosity);
     }
 
     JLineTerminalUi(Terminal terminal, LineReader lineReader) {
-        this(terminal, lineReader, new SecretRedactor(""));
+        this(terminal, lineReader, new SecretRedactor(""), UiVerbosity.COMPACT);
     }
 
     JLineTerminalUi(Terminal terminal, LineReader lineReader, SecretRedactor redactor) {
+        this(terminal, lineReader, redactor, UiVerbosity.COMPACT);
+    }
+
+    JLineTerminalUi(
+            Terminal terminal,
+            LineReader lineReader,
+            SecretRedactor redactor,
+            UiVerbosity verbosity) {
         this.terminal = Objects.requireNonNull(terminal, "terminal");
         this.lineReader = Objects.requireNonNull(lineReader, "lineReader");
         this.writer = terminal.writer();
         this.toolFormatter = new ToolSummaryFormatter(redactor);
+        this.verbosity = new AtomicReference<>(Objects.requireNonNull(verbosity, "verbosity"));
         terminal.handle(Terminal.Signal.INT, signal -> interruptHandler.get().run());
         installMultilineWidget();
     }
@@ -81,7 +108,8 @@ public final class JLineTerminalUi implements TerminalUi {
         }
         this.context = Objects.requireNonNull(context, "context");
         TerminalMode mode = currentMode();
-        for (String line : layout.welcome(context, state.get(), terminalWidth(), mode)) {
+        for (String line : layout.welcome(
+                context, state.get(), terminalWidth(), mode, verbosity.get())) {
             printStyled(line, AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN), mode);
         }
         writer.flush();
@@ -92,6 +120,9 @@ public final class JLineTerminalUi implements TerminalUi {
         UiState next = Objects.requireNonNull(state, "state");
         this.state.set(next);
         if (closed.get() || context == null) {
+            return;
+        }
+        if (!displayPolicy().showStateTransitions()) {
             return;
         }
         finishOpenAssistantLine();
@@ -107,18 +138,50 @@ public final class JLineTerminalUi implements TerminalUi {
     }
 
     @Override
+    public UiVerbosity verbosity() {
+        return verbosity.get();
+    }
+
+    @Override
+    public synchronized void setVerbosity(UiVerbosity verbosity) {
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        this.verbosity.set(Objects.requireNonNull(verbosity, "verbosity"));
+    }
+
+    @Override
+    public synchronized void showVerbosityChanged(UiVerbosity verbosity) {
+        if (closed.get()) {
+            return;
+        }
+        String line = verbosity == UiVerbosity.VERBOSE
+                ? "[UI] 详细模式"
+                : "[UI] 精简模式";
+        printStyled(
+                TerminalLayout.truncate(line, terminalWidth()),
+                AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN),
+                currentMode());
+        writer.flush();
+    }
+
+    @Override
     public String readLine(String prompt) {
         if (closed.get()) {
             return null;
         }
         TerminalMode mode = currentMode();
-        String effectivePrompt = context == null ? prompt : layout.primaryPrompt(mode);
+        UiVerbosity currentVerbosity = verbosity.get();
+        String effectivePrompt = context == null
+                ? prompt
+                : layout.primaryPrompt(mode, currentVerbosity);
         if (context != null) {
-            String top = layout.inputTop(terminalWidth(), mode);
+            String top = layout.inputTop(terminalWidth(), mode, currentVerbosity);
             if (!top.isEmpty()) {
                 printStyled(top, AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN), mode);
             }
-            lineReader.setVariable(LineReader.SECONDARY_PROMPT_PATTERN, layout.continuationPrompt(mode));
+            lineReader.setVariable(
+                    LineReader.SECONDARY_PROMPT_PATTERN,
+                    layout.continuationPrompt(mode, currentVerbosity));
             writer.flush();
         }
         try {
@@ -129,9 +192,12 @@ public final class JLineTerminalUi implements TerminalUi {
         } catch (EndOfFileException exception) {
             return null;
         } finally {
-            if (context != null && !closed.get()) {
-                printStyled(layout.statusLine(context, state.get(), terminalWidth(), mode),
-                        stateStyle(state.get()), mode);
+            if (context != null && !closed.get() && displayPolicy().showStateTransitions()) {
+                String status = layout.statusLine(
+                        context, state.get(), terminalWidth(), mode, verbosity.get());
+                if (!status.isEmpty()) {
+                    printStyled(status, stateStyle(state.get()), mode);
+                }
                 writer.flush();
             }
         }
@@ -145,7 +211,12 @@ public final class JLineTerminalUi implements TerminalUi {
         finishOpenAssistantLine();
         finishOpenThinkingLine();
         TerminalMode mode = currentMode();
-        String prefix = mode == TerminalMode.PLAIN ? "ImioCode> " : "ImioCode › ";
+        String prefix;
+        if (verbosity.get() == UiVerbosity.COMPACT) {
+            prefix = mode == TerminalMode.PLAIN ? "> " : "› ";
+        } else {
+            prefix = mode == TerminalMode.PLAIN ? "ImioCode> " : "ImioCode › ";
+        }
         writer.print(styledPrompt(prefix, mode));
         writer.flush();
         assistantLineOpen = true;
@@ -167,7 +238,7 @@ public final class JLineTerminalUi implements TerminalUi {
 
     @Override
     public synchronized void beginThinking() {
-        if (closed.get() || thinkingLineOpen) {
+        if (closed.get() || thinkingLineOpen || !displayPolicy().showThinking()) {
             return;
         }
         finishOpenAssistantLine();
@@ -186,7 +257,7 @@ public final class JLineTerminalUi implements TerminalUi {
 
     @Override
     public synchronized void appendThinkingText(String text) {
-        if (closed.get() || text == null || text.isEmpty()) {
+        if (closed.get() || text == null || text.isEmpty() || !displayPolicy().showThinking()) {
             return;
         }
         if (!thinkingLineOpen) {
@@ -204,13 +275,16 @@ public final class JLineTerminalUi implements TerminalUi {
 
     @Override
     public synchronized void endThinking() {
+        if (!displayPolicy().showThinking()) {
+            return;
+        }
         finishOpenThinkingLine();
     }
 
     @Override
     public synchronized void showUsage(io.imiocode.llm.TokenUsage usage) {
         String formatted = usageFormatter.format(usage);
-        if (closed.get() || formatted.isEmpty()) {
+        if (closed.get() || formatted.isEmpty() || !displayPolicy().showUsage()) {
             return;
         }
         finishOpenAssistantLine();
@@ -221,11 +295,24 @@ public final class JLineTerminalUi implements TerminalUi {
 
     @Override
     public synchronized void showToolEvent(ToolExecutionEvent event) {
-        if (closed.get()) {
+        if (closed.get() || !displayPolicy().showToolEvent(event.state())) {
             return;
         }
         finishOpenAssistantLine();
         finishOpenThinkingLine();
+        TerminalMode mode = currentMode();
+        if (verbosity.get() == UiVerbosity.COMPACT) {
+            boolean succeeded = event.state() == ToolExecutionState.SUCCEEDED;
+            String marker = mode == TerminalMode.PLAIN
+                    ? (succeeded ? "[ok]" : "[fail]")
+                    : (succeeded ? "✓" : "✗");
+            String line = marker + " " + toolFormatter.compactSummary(event);
+            AttributedStyle style = AttributedStyle.DEFAULT.foreground(
+                    succeeded ? AttributedStyle.GREEN : AttributedStyle.RED);
+            printStyled(TerminalLayout.truncate(line, terminalWidth()), style, mode);
+            writer.flush();
+            return;
+        }
         String marker = switch (event.state()) {
             case QUEUED -> "○";
             case RUNNING -> "▶";
@@ -237,7 +324,6 @@ public final class JLineTerminalUi implements TerminalUi {
                 + event.state().name().toLowerCase(java.util.Locale.ROOT) + "] "
                 + toolFormatter.inputSummary(event.call()) + " — "
                 + toolFormatter.resultSummary(event);
-        TerminalMode mode = currentMode();
         AttributedStyle style = switch (event.state()) {
             case QUEUED -> AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW);
             case RUNNING -> AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN);
@@ -344,7 +430,7 @@ public final class JLineTerminalUi implements TerminalUi {
 
     @Override
     public synchronized void onMcpEvent(McpEvent event) {
-        if (closed.get()) {
+        if (closed.get() || !displayPolicy().showMcpEvent(event.type())) {
             return;
         }
         String prefix = "[MCP/" + event.serverName() + "] ";
@@ -442,7 +528,7 @@ public final class JLineTerminalUi implements TerminalUi {
 
     @Override
     public synchronized void showContextEvent(ContextEvent event) {
-        if (closed.get()) return;
+        if (closed.get() || !displayPolicy().showContextEvent(event)) return;
         finishOpenAssistantLine();
         finishOpenThinkingLine();
         String line;
@@ -518,6 +604,10 @@ public final class JLineTerminalUi implements TerminalUi {
 
     private TerminalMode currentMode() {
         return TerminalMode.select(terminalWidth(), supportsAnsi());
+    }
+
+    private UiDisplayPolicy displayPolicy() {
+        return new UiDisplayPolicy(verbosity.get());
     }
 
     private int terminalWidth() {
