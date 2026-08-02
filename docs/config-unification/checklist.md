@@ -73,7 +73,7 @@
 - [x] C43：真实统一配置应用集成测试通过。（验证：运行 `UnifiedConfigApplicationIT`，0 failures、0 errors。）
 - [x] C44：项目全部测试通过。（验证：JDK 21 下运行 `mvn clean test`，记录 tests、failures、errors、skipped。）
 - [x] C45：可运行 shaded JAR 构建成功。（验证：运行 `mvn package`，确认 BUILD SUCCESS 和目标 JAR 存在。）
-- [ ] C46：Git 暂存和提交不包含 `claude.md`、`hello.txt` 或其他用户改动。（验证：逐次检查 `git diff --cached --name-only` 与最终 `git status --short`。）
+- [x] C46：Git 暂存和提交不包含 `claude.md`、`hello.txt` 或其他用户改动。（验证：逐次检查 `git diff --cached --name-only` 与最终 `git status --short`。）
 
 ## 端到端场景
 
