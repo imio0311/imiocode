@@ -1,5 +1,7 @@
 # ch7 MCP 开放工具生态 Spec
 
+> 当前推荐入口已统一为项目根目录 `config.yaml` 的 `mcp.servers` 区域；本章记录的三层文件仍作为兼容回退格式。
+
 ## 背景
 
 ImioCode 当前只有六个内置工具。新增工具需要修改 Java 代码、注册工具并重新打包，无法直接复用社区已有的 GitHub、数据库、Slack 等 MCP Server。

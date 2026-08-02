@@ -10,34 +10,36 @@ mvn package
 java -jar target/imiocode-0.2.0-SNAPSHOT-all.jar
 ```
 
-主模型配置仍使用项目根目录的 `config.yaml`。
+所有项目配置统一放在根目录 `config.yaml`。首次使用可复制 `config.example.yaml`，并通过环境变量提供 API Key：
+
+```powershell
+Copy-Item config.example.yaml config.yaml
+$env:DEEPSEEK_API_KEY="你的密钥"
+```
+
+环境变量直接覆盖仍保持最高优先级。配置中的敏感值也可以使用 `${NAME}` 引用，避免把明文凭据写进项目文件。
 
 ## MCP Server 配置
 
-ImioCode 启动时按 Server 名合并以下文件：
+MCP Server 放在根配置的 `mcp.servers` 下。修改配置或 Server 工具后需要重启 ImioCode。
 
-1. 用户级：`%USERPROFILE%\.imiocode\mcp.yaml`
-2. 项目级：`<项目>\.imiocode\mcp.yaml`
-3. 本地级：`<项目>\.imiocode\mcp.local.yaml`
-
-优先级为“用户级 > 项目级 > 本地级”。同名 Server 使用高优先级的完整配置，不进行字段级混合。修改配置或 Server 工具后需要重启 ImioCode。
-
-完整示例见 `docs/ch7/mcp.example.yaml`。
+旧的用户级、项目级和本地级 MCP 文件仍可兼容读取，但只有 `config.yaml` 完全缺少 `mcp` 字段时才会回退，并显示迁移提示。完整迁移说明见 `docs/config-unification/migration.md`。
 
 ### stdio
 
 ```yaml
-servers:
-  local-tools:
-    transport: stdio
-    command: npx
-    args:
-      - -y
-      - "@modelcontextprotocol/server-example"
-    env:
-      EXAMPLE_TOKEN: "${EXAMPLE_TOKEN}"
-    initialization-timeout-seconds: 10
-    call-timeout-seconds: 120
+mcp:
+  servers:
+    local-tools:
+      transport: stdio
+      command: npx
+      args:
+        - -y
+        - "@modelcontextprotocol/server-example"
+      env:
+        EXAMPLE_TOKEN: "${EXAMPLE_TOKEN}"
+      initialization-timeout-seconds: 10
+      call-timeout-seconds: 120
 ```
 
 每次启动时，ImioCode 都会显示 Server 名、command 和 args，并等待用户确认后才启动 stdio 子进程。子进程只会收到 PATH 和该 Server 显式配置的 env，不会继承模型 API Key 等其他环境变量。
@@ -45,12 +47,13 @@ servers:
 ### Streamable HTTP
 
 ```yaml
-servers:
-  remote-tools:
-    transport: streamable-http
-    url: https://mcp.example.com/mcp
-    headers:
-      Authorization: "Bearer ${MCP_ACCESS_TOKEN}"
+mcp:
+  servers:
+    remote-tools:
+      transport: streamable-http
+      url: https://mcp.example.com/mcp
+      headers:
+        Authorization: "Bearer ${MCP_ACCESS_TOKEN}"
 ```
 
 远程地址必须使用 HTTPS；仅 localhost、127.0.0.1 和 `[::1]` 允许 HTTP。当前支持 POST 返回的 JSON 或有限 SSE，不支持旧版 SSE Transport 和长期 GET 推送。
@@ -74,16 +77,17 @@ mcp_<serverName>__<toolName>
 - `full-access`：允许执行。
 - Plan Mode：不向模型暴露 MCP 工具。
 
-可在 `permissions.yaml` 中配置规则：
+权限模式与规则放在根配置的 `permissions` 区域：
 
 ```yaml
-mode: ask
-rules:
-  - action: allow
-    tool: "mcp_github-main__issues_*"
+permissions:
+  mode: ask
+  rules:
+    - action: allow
+      tool: "mcp_github-main__issues_*"
 
-  - action: deny
-    tool: "mcp_database__drop_*"
+    - action: deny
+      tool: "mcp_database__drop_*"
 ```
 
 MCP Header、环境变量值和工具参数不会显示在 stdio 启动确认中。

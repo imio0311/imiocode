@@ -18,11 +18,35 @@ agent:
 
 providers:
   openai:
-    api-key: ""
+    api-key: ${OPENAI_API_KEY}
     base-url: https://api.openai.com
   anthropic:
-    api-key: ""
+    api-key: ${ANTHROPIC_API_KEY}
     base-url: https://api.anthropic.com
   deepseek:
-    api-key: ""
+    api-key: ${DEEPSEEK_API_KEY}
     base-url: https://api.deepseek.com
+
+context:
+  window-tokens: 64000
+  auto-compact-threshold: 0.80
+
+mcp:
+  servers:
+    context7:
+      enabled: true
+      transport: stdio
+      command: npx
+      args:
+        - -y
+        - '@upstash/context7-mcp'
+      initialization-timeout-seconds: 120
+      call-timeout-seconds: 120
+
+permissions:
+  mode: ask
+  rules:
+    - action: allow
+      tool: mcp_context7__query-docs
+    - action: allow
+      tool: mcp_context7__resolve-library-id

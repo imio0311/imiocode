@@ -4,6 +4,8 @@ import io.imiocode.agent.Agent;
 import io.imiocode.config.AppConfig;
 import io.imiocode.config.ConfigException;
 import io.imiocode.config.ConfigLoader;
+import io.imiocode.config.ConfigNotice;
+import io.imiocode.config.RuntimeConfig;
 import io.imiocode.context.ApproximateTokenEstimator;
 import io.imiocode.context.ContextManager;
 import io.imiocode.context.ConversationSerializer;
@@ -17,7 +19,6 @@ import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmClientFactory;
 import io.imiocode.mcp.config.McpConfigError;
 import io.imiocode.mcp.config.McpConfigLoadResult;
-import io.imiocode.mcp.config.McpConfigLoader;
 import io.imiocode.mcp.jsonrpc.JsonRpcCodec;
 import io.imiocode.mcp.manager.McpManager;
 import io.imiocode.mcp.manager.McpStartupResult;
@@ -35,7 +36,6 @@ import io.imiocode.permission.PermissionSettings;
 import io.imiocode.permission.command.RegexDangerousCommandDetector;
 import io.imiocode.permission.command.StrictSafeCommandDetector;
 import io.imiocode.permission.rule.PermissionRuleEngine;
-import io.imiocode.permission.rule.PermissionRuleLoader;
 import io.imiocode.permission.sandbox.WorkspacePathSandbox;
 import io.imiocode.terminal.JLineTerminalUi;
 import io.imiocode.terminal.TerminalUi;
@@ -75,9 +75,12 @@ public final class ImioCodeApplication {
         McpManager mcpManager = null;
         try {
             Path workspace = Path.of("").toAbsolutePath().normalize();
-            AppConfig config = new ConfigLoader().load(workspace, System.getenv());
+            Path userHome = Path.of(System.getProperty("user.home")).toAbsolutePath().normalize();
+            RuntimeConfig runtimeConfig = new ConfigLoader().loadAll(
+                    workspace, userHome, System.getenv());
+            AppConfig config = runtimeConfig.app();
             ToolLimits limits = ToolLimits.defaults();
-            SecretRedactor redactor = new SecretRedactor(config.apiKey());
+            SecretRedactor redactor = runtimeConfig.redactor();
             terminal = new JLineTerminalUi(redactor);
             String version = VersionResolver.resolve();
             terminal.showWelcome(new UiContext(
@@ -86,10 +89,11 @@ public final class ImioCodeApplication {
                     config.provider().configValue(),
                     config.model(),
                     workspace));
+            for (ConfigNotice notice : runtimeConfig.notices()) {
+                terminal.printInfo(notice.safeMessage());
+            }
             WorkspacePolicy policy = new WorkspacePolicy(workspace);
-            PermissionSettings permissionSettings = new PermissionRuleLoader().load(
-                    workspace,
-                    Path.of(System.getProperty("user.home")).toAbsolutePath().normalize());
+            PermissionSettings permissionSettings = runtimeConfig.permissions();
             WorkspacePathSandbox sandbox = new WorkspacePathSandbox(policy);
             PermissionChecker permissionChecker = new PermissionChecker(
                     workspace,
@@ -111,11 +115,7 @@ public final class ImioCodeApplication {
             registry.register(new GlobTool(policy, limits, redactor));
             registry.register(new GrepTool(policy, limits, redactor));
 
-            McpConfigLoadResult mcpConfigs = new McpConfigLoader().load(
-                    workspace,
-                    Path.of(System.getProperty("user.home")).toAbsolutePath().normalize(),
-                    System.getenv(),
-                    redactor);
+            McpConfigLoadResult mcpConfigs = runtimeConfig.mcp();
             for (McpConfigError error : mcpConfigs.errors()) {
                 terminal.printError(formatMcpError(error));
             }
