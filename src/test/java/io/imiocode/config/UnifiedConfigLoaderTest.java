@@ -189,6 +189,7 @@ class UnifiedConfigLoaderTest {
         assertTrue(config.mcp().servers().containsKey("context7"));
         assertEquals(PermissionMode.ASK, config.permissions().mode());
         assertEquals(2, config.permissions().projectRules().size());
+        assertEquals(UiVerbosity.COMPACT, config.app().ui().verbosity());
     }
 
     private static void writeBaseConfig(Path workspace) throws Exception {

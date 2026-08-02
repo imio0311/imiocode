@@ -18,6 +18,7 @@ record ConfigDocument(
         ThinkingDocument thinking,
         AgentDocument agent,
         ContextDocument context,
+        UiDocument ui,
         McpConfigDocument mcp,
         PermissionConfigDocument permissions,
         Map<String, ProviderConfig> providers) {
@@ -33,7 +34,7 @@ record ConfigDocument(
     static ConfigDocument empty() {
         return new ConfigDocument(
                 null, null, null, null, null, null, null, null,
-                null, null, Map.of());
+                null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -54,6 +55,7 @@ record ConfigDocument(
                 + ", thinking=" + thinking
                 + ", agent=" + agent
                 + ", context=" + context
+                + ", ui=" + ui
                 + ", mcp=" + (mcp == null ? "absent" : "configured")
                 + ", permissions=" + (permissions == null ? "absent" : "configured")
                 + ", providers=***]";
@@ -76,5 +78,8 @@ record ConfigDocument(
     record ContextDocument(
             @JsonProperty("window-tokens") Integer windowTokens,
             @JsonProperty("auto-compact-threshold") Double autoCompactThreshold) {
+    }
+
+    record UiDocument(String verbosity) {
     }
 }

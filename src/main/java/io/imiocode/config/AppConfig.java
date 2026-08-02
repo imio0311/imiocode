@@ -14,7 +14,8 @@ public record AppConfig(
         int maxOutputTokens,
         ThinkingConfig thinking,
         AgentConfig agent,
-        ContextConfig context) {
+        ContextConfig context,
+        UiConfig ui) {
 
     public AppConfig {
         Objects.requireNonNull(provider, "provider");
@@ -26,6 +27,7 @@ public record AppConfig(
         Objects.requireNonNull(thinking, "thinking");
         Objects.requireNonNull(agent, "agent");
         Objects.requireNonNull(context, "context");
+        Objects.requireNonNull(ui, "ui");
         if (!baseUri.isAbsolute()) {
             throw new IllegalArgumentException("baseUri 必须是绝对 URI");
         }
@@ -52,9 +54,24 @@ public record AppConfig(
             Duration requestTimeout,
             int maxOutputTokens,
             ThinkingConfig thinking,
+            AgentConfig agent,
+            ContextConfig context) {
+        this(provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens,
+                thinking, agent, context, UiConfig.defaults());
+    }
+
+    public AppConfig(
+            Provider provider,
+            String model,
+            String apiKey,
+            URI baseUri,
+            Duration connectTimeout,
+            Duration requestTimeout,
+            int maxOutputTokens,
+            ThinkingConfig thinking,
             AgentConfig agent) {
         this(provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens,
-                thinking, agent, ContextConfig.defaults());
+                thinking, agent, ContextConfig.defaults(), UiConfig.defaults());
     }
 
     public AppConfig(
@@ -67,7 +84,7 @@ public record AppConfig(
             int maxOutputTokens,
             ThinkingConfig thinking) {
         this(provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens,
-                thinking, AgentConfig.defaults(), ContextConfig.defaults());
+                thinking, AgentConfig.defaults(), ContextConfig.defaults(), UiConfig.defaults());
     }
 
     public AppConfig(
@@ -79,7 +96,7 @@ public record AppConfig(
             Duration requestTimeout,
             int maxOutputTokens) {
         this(provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens,
-                ThinkingConfig.disabled(), AgentConfig.defaults(), ContextConfig.defaults());
+                ThinkingConfig.disabled(), AgentConfig.defaults(), ContextConfig.defaults(), UiConfig.defaults());
     }
 
     private static String requireText(String value, String name) {
@@ -100,6 +117,7 @@ public record AppConfig(
                 + ", maxOutputTokens=" + maxOutputTokens
                 + ", thinking=" + thinking
                 + ", agent=" + agent
-                + ", context=" + context + "]";
+                + ", context=" + context
+                + ", ui=" + ui + "]";
     }
 }

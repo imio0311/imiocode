@@ -246,11 +246,14 @@ public final class ConfigLoader {
             throw new ConfigException("配置项 context.window-tokens 必须大于 max-output-tokens");
         }
         ContextConfig context = new ContextConfig(contextWindowTokens, autoCompactThreshold);
+        ConfigDocument.UiDocument uiDocument = document.ui();
+        UiConfig ui = new UiConfig(UiVerbosity.parse(
+                uiDocument == null ? null : uiDocument.verbosity()));
 
         try {
             return new AppConfig(
                     provider, model, apiKey, baseUri, connectTimeout, requestTimeout,
-                    maxOutputTokens, thinking, agent, context);
+                    maxOutputTokens, thinking, agent, context, ui);
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("配置无效：" + exception.getMessage(), exception);
         }

@@ -75,6 +75,30 @@ class YamlConfigLoaderTest {
     }
 
     @Test
+    void loadsUiDocumentAndRejectsUnknownUiField() throws Exception {
+        write("""
+                provider: deepseek
+                model: deepseek-chat
+                ui:
+                  verbosity: compact
+                """);
+
+        assertEquals("compact", loader.load(tempDirectory).ui().verbosity());
+
+        write("""
+                provider: deepseek
+                model: deepseek-chat
+                ui:
+                  unknown: hidden-value
+                """);
+        ConfigException exception = assertThrows(
+                ConfigException.class,
+                () -> loader.load(tempDirectory));
+        assertTrue(exception.getMessage().contains("unknown"));
+        assertFalse(exception.getMessage().contains("hidden-value"));
+    }
+
+    @Test
     void rejectsUnknownTopLevelFieldWithoutLeakingValue() throws Exception {
         write("""
                 provider: deepseek

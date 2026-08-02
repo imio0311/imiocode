@@ -46,6 +46,7 @@ class ConfigLoaderTest {
         assertEquals(1234, config.maxOutputTokens());
         assertFalse(config.thinking().enabled());
         assertEquals(ContextConfig.defaults(), config.context());
+        assertEquals(UiConfig.defaults(), config.ui());
     }
 
     @Test
@@ -71,6 +72,48 @@ class ConfigLoaderTest {
                 "IMIO_CONTEXT_AUTO_COMPACT_THRESHOLD", "0.70"));
         assertEquals(48_000, environmentConfig.context().windowTokens());
         assertEquals(0.70d, environmentConfig.context().autoCompactThreshold());
+    }
+
+    @Test
+    void loadsUiVerbosityAndDefaultsToCompact() throws Exception {
+        writeYaml("""
+                provider: deepseek
+                model: deepseek-chat
+                ui:
+                  verbosity: VeRbOsE
+                providers:
+                  deepseek:
+                    api-key: test-key
+                """);
+
+        assertEquals(UiVerbosity.VERBOSE, loader.load(tempDirectory, Map.of()).ui().verbosity());
+
+        writeYaml("""
+                provider: deepseek
+                model: deepseek-chat
+                providers:
+                  deepseek:
+                    api-key: test-key
+                """);
+        assertEquals(UiVerbosity.COMPACT, loader.load(tempDirectory, Map.of()).ui().verbosity());
+    }
+
+    @Test
+    void rejectsUnknownUiVerbosity() throws Exception {
+        writeYaml("""
+                provider: deepseek
+                model: deepseek-chat
+                ui:
+                  verbosity: noisy
+                providers:
+                  deepseek:
+                    api-key: test-key
+                """);
+
+        ConfigException exception = assertThrows(
+                ConfigException.class,
+                () -> loader.load(tempDirectory, Map.of()));
+        assertTrue(exception.getMessage().contains("ui.verbosity"));
     }
 
     @Test
