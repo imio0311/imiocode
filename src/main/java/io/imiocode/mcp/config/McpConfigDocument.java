@@ -1,12 +1,13 @@
 package io.imiocode.mcp.config;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.List;
 import java.util.Map;
 
 /** YAML 单层文档的 Jackson 映射类型。 */
-public record McpConfigDocument(Map<String, ServerDocument> servers) {
+public record McpConfigDocument(Map<String, JsonNode> servers) {
     public McpConfigDocument {
         servers = Map.copyOf(servers == null ? Map.of() : servers);
     }

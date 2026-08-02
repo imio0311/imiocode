@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -62,5 +63,42 @@ class PermissionRuleLoaderTest {
         Files.writeString(workspace.resolve(".imiocode/permissions.yaml"), "unknown: true");
         assertThrows(ConfigException.class,
                 () -> new PermissionRuleLoader().load(workspace, home));
+    }
+
+    @Test
+    void loadsUnifiedRulesAsOrderedProjectRules() {
+        PermissionConfigDocument document = new PermissionConfigDocument(
+                "auto-edit",
+                List.of(
+                        new PermissionConfigDocument.RuleDocument("allow", "read_*", "src/**"),
+                        new PermissionConfigDocument.RuleDocument("ask", "bash", null)));
+
+        PermissionSettings settings = new PermissionRuleLoader().loadUnified(document);
+
+        assertEquals(PermissionMode.AUTO_EDIT, settings.mode());
+        assertEquals(List.of(), settings.userRules());
+        assertEquals(2, settings.projectRules().size());
+        assertEquals(PermissionAction.ALLOW, settings.projectRules().getFirst().action());
+        assertEquals(PermissionAction.ASK, settings.projectRules().get(1).action());
+        assertEquals(List.of(), settings.localRules());
+    }
+
+    @Test
+    void unifiedEmptyDocumentUsesSafeDefaults() {
+        PermissionSettings settings = new PermissionRuleLoader().loadUnified(
+                new PermissionConfigDocument(null, null));
+
+        assertEquals(PermissionMode.ASK, settings.mode());
+        assertEquals(List.of(), settings.projectRules());
+    }
+
+    @Test
+    void rejectsInvalidUnifiedRuleAsOneConfiguration() {
+        PermissionConfigDocument document = new PermissionConfigDocument(
+                "ask",
+                List.of(new PermissionConfigDocument.RuleDocument("allow", "", null)));
+
+        assertThrows(ConfigException.class,
+                () -> new PermissionRuleLoader().loadUnified(document));
     }
 }

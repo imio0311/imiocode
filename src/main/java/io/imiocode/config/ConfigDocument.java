@@ -1,6 +1,8 @@
 package io.imiocode.config;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.imiocode.mcp.config.McpConfigDocument;
+import io.imiocode.permission.rule.PermissionConfigDocument;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -16,6 +18,8 @@ record ConfigDocument(
         ThinkingDocument thinking,
         AgentDocument agent,
         ContextDocument context,
+        McpConfigDocument mcp,
+        PermissionConfigDocument permissions,
         Map<String, ProviderConfig> providers) {
 
     ConfigDocument {
@@ -27,7 +31,9 @@ record ConfigDocument(
     }
 
     static ConfigDocument empty() {
-        return new ConfigDocument(null, null, null, null, null, null, null, null, Map.of());
+        return new ConfigDocument(
+                null, null, null, null, null, null, null, null,
+                null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -48,6 +54,8 @@ record ConfigDocument(
                 + ", thinking=" + thinking
                 + ", agent=" + agent
                 + ", context=" + context
+                + ", mcp=" + (mcp == null ? "absent" : "configured")
+                + ", permissions=" + (permissions == null ? "absent" : "configured")
                 + ", providers=***]";
     }
 

@@ -36,6 +36,11 @@ public final class PermissionRuleLoader {
     }
 
     public PermissionSettings load(Path workspace, Path userHome) {
+        return loadLegacy(workspace, userHome);
+    }
+
+    /** 按旧格式加载用户、项目和本地三层权限文件。 */
+    public PermissionSettings loadLegacy(Path workspace, Path userHome) {
         Objects.requireNonNull(workspace, "workspace 不能为空");
         Objects.requireNonNull(userHome, "userHome 不能为空");
         Path normalizedWorkspace = workspace.toAbsolutePath().normalize();
@@ -52,6 +57,18 @@ public final class PermissionRuleLoader {
         return new PermissionSettings(mode, user.rules(), project.rules(), local.rules());
     }
 
+    /** 加载根 config.yaml 中的统一权限域，不读取任何旧权限文件。 */
+    public PermissionSettings loadUnified(PermissionConfigDocument document) {
+        Objects.requireNonNull(document, "document 不能为空");
+        try {
+            LayerDocument project = convert(document, PermissionRuleLayer.PROJECT);
+            PermissionMode mode = project.mode() == null ? PermissionMode.ASK : project.mode();
+            return new PermissionSettings(mode, List.of(), project.rules(), List.of());
+        } catch (IllegalArgumentException exception) {
+            throw new ConfigException("config.yaml 的 " + exception.getMessage(), exception);
+        }
+    }
+
     private LayerDocument read(Path path, PermissionRuleLayer layer) {
         if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
             return new LayerDocument(null, List.of());
@@ -66,13 +83,29 @@ public final class PermissionRuleLoader {
             if (document == null) {
                 return new LayerDocument(null, List.of());
             }
-            PermissionMode mode = document.mode() == null
-                    ? null
-                    : PermissionMode.parse(document.mode());
-            List<PermissionRule> rules = new ArrayList<>();
-            for (PermissionConfigDocument.RuleDocument rule : document.rules()) {
+            return convert(document, layer);
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            throw new ConfigException("权限配置格式错误: " + safeName(layer), exception);
+        } catch (IOException exception) {
+            throw new ConfigException("无法读取权限配置: " + safeName(layer), exception);
+        }
+    }
+
+    private LayerDocument convert(
+            PermissionConfigDocument document,
+            PermissionRuleLayer layer) {
+        PermissionMode mode;
+        try {
+            mode = document.mode() == null ? null : PermissionMode.parse(document.mode());
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("permissions.mode 无效", exception);
+        }
+        List<PermissionRule> rules = new ArrayList<>();
+        for (int index = 0; index < document.rules().size(); index++) {
+            PermissionConfigDocument.RuleDocument rule = document.rules().get(index);
+            try {
                 if (rule == null || rule.tool() == null || rule.tool().isBlank()) {
-                    throw new IllegalArgumentException("权限规则 tool 不能为空");
+                    throw new IllegalArgumentException("tool 不能为空");
                 }
                 PermissionAction action = PermissionAction.parse(rule.action());
                 globMatcher.compile(rule.tool());
@@ -80,13 +113,13 @@ public final class PermissionRuleLoader {
                         .map(String::trim);
                 target.ifPresent(globMatcher::compile);
                 rules.add(new PermissionRule(layer, action, rule.tool(), target));
+            } catch (IllegalArgumentException exception) {
+                throw new IllegalArgumentException(
+                        "permissions.rules[" + index + "] 无效",
+                        exception);
             }
-            return new LayerDocument(mode, List.copyOf(rules));
-        } catch (JsonProcessingException | IllegalArgumentException exception) {
-            throw new ConfigException("权限配置格式错误: " + safeName(layer), exception);
-        } catch (IOException exception) {
-            throw new ConfigException("无法读取权限配置: " + safeName(layer), exception);
         }
+        return new LayerDocument(mode, List.copyOf(rules));
     }
 
     private static PermissionMode firstMode(LayerDocument... layers) {

@@ -43,6 +43,15 @@ public final class McpConfigLoader {
             Path userHome,
             Map<String, String> startupEnvironment,
             SecretRedactor redactor) {
+        return loadLegacy(workspace, userHome, startupEnvironment, redactor);
+    }
+
+    /** 按旧格式加载用户、项目和本地三层 MCP 配置。 */
+    public McpConfigLoadResult loadLegacy(
+            Path workspace,
+            Path userHome,
+            Map<String, String> startupEnvironment,
+            SecretRedactor redactor) {
         Objects.requireNonNull(workspace, "workspace");
         Objects.requireNonNull(userHome, "userHome");
         Objects.requireNonNull(startupEnvironment, "startupEnvironment");
@@ -58,6 +67,33 @@ public final class McpConfigLoader {
             loadLayer(path.toAbsolutePath().normalize(), merged, errors);
         }
 
+        return resolve(merged, errors, startupEnvironment, redactor);
+    }
+
+    /** 加载根 config.yaml 中已经声明的 MCP 配置域，不读取任何旧配置文件。 */
+    public McpConfigLoadResult loadUnified(
+            McpConfigDocument document,
+            Path configPath,
+            Map<String, String> startupEnvironment,
+            SecretRedactor redactor) {
+        Objects.requireNonNull(document, "document");
+        Objects.requireNonNull(configPath, "configPath");
+        Objects.requireNonNull(startupEnvironment, "startupEnvironment");
+        Objects.requireNonNull(redactor, "redactor");
+
+        List<McpConfigError> errors = new ArrayList<>();
+        Map<String, McpServerConfig> servers = new LinkedHashMap<>();
+        Path source = configPath.toAbsolutePath().normalize();
+        document.servers().forEach((name, node) ->
+                loadServer(name, node, source, servers, errors));
+        return resolve(servers, errors, startupEnvironment, redactor);
+    }
+
+    private McpConfigLoadResult resolve(
+            Map<String, McpServerConfig> merged,
+            List<McpConfigError> errors,
+            Map<String, String> startupEnvironment,
+            SecretRedactor redactor) {
         Map<String, ResolvedMcpServerConfig> resolved = new LinkedHashMap<>();
         merged.entrySet().stream()
                 .sorted(Map.Entry.comparingByKey())
@@ -106,20 +142,34 @@ public final class McpConfigLoader {
                 errors.add(new McpConfigError(path, "", "invalid_document", "MCP 配置的 servers 必须是对象"));
                 return;
             }
-            servers.fields().forEachRemaining(entry -> {
-                try {
-                    McpConfigDocument.ServerDocument document =
-                            mapper.treeToValue(entry.getValue(), McpConfigDocument.ServerDocument.class);
-                    merged.put(entry.getKey(), toConfig(entry.getKey(), document, path));
-                } catch (JsonProcessingException | IllegalArgumentException exception) {
-                    errors.add(new McpConfigError(
-                            path, entry.getKey(), "invalid_server", "MCP Server 配置无效"));
-                }
-            });
+            servers.fields().forEachRemaining(entry ->
+                    loadServer(entry.getKey(), entry.getValue(), path, merged, errors));
         } catch (JsonProcessingException exception) {
             errors.add(new McpConfigError(path, "", "invalid_yaml", "MCP YAML 格式错误"));
         } catch (IOException exception) {
             errors.add(new McpConfigError(path, "", "read_failed", "无法读取 MCP 配置"));
+        }
+    }
+
+    private void loadServer(
+            String name,
+            JsonNode node,
+            Path source,
+            Map<String, McpServerConfig> target,
+            List<McpConfigError> errors) {
+        try {
+            if (name == null || name.isBlank() || node == null || !node.isObject()) {
+                throw new IllegalArgumentException("Server 名称和配置必须有效");
+            }
+            McpConfigDocument.ServerDocument document =
+                    mapper.treeToValue(node, McpConfigDocument.ServerDocument.class);
+            target.put(name, toConfig(name, document, source));
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            errors.add(new McpConfigError(
+                    source,
+                    Objects.requireNonNullElse(name, ""),
+                    "invalid_server",
+                    "MCP Server 配置无效"));
         }
     }
 

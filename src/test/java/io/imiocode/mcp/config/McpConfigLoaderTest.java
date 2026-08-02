@@ -1,5 +1,7 @@
 package io.imiocode.mcp.config;
 
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.imiocode.tool.SecretRedactor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assumptions;
@@ -138,6 +140,39 @@ class McpConfigLoaderTest {
 
         assertTrue(result.servers().isEmpty());
         assertEquals("unsafe_file", result.errors().getFirst().code());
+    }
+
+    @Test
+    void loadsUnifiedServersAndIsolatesInvalidNodes() {
+        ObjectNode valid = JsonNodeFactory.instance.objectNode();
+        valid.put("transport", "stdio");
+        valid.put("command", "java");
+        ObjectNode invalid = JsonNodeFactory.instance.objectNode();
+        invalid.put("transport", "stdio");
+        invalid.put("unknown-field", true);
+
+        McpConfigLoadResult result = new McpConfigLoader().loadUnified(
+                new McpConfigDocument(Map.of("valid", valid, "invalid", invalid)),
+                tempDirectory.resolve("config.yaml"),
+                Map.of(),
+                new SecretRedactor("model-secret"));
+
+        assertEquals(1, result.servers().size());
+        assertTrue(result.servers().containsKey("valid"));
+        assertEquals(1, result.errors().size());
+        assertEquals("invalid", result.errors().getFirst().serverName());
+    }
+
+    @Test
+    void unifiedEmptyServersExplicitlyProducesNoMcpConfiguration() {
+        McpConfigLoadResult result = new McpConfigLoader().loadUnified(
+                new McpConfigDocument(Map.of()),
+                tempDirectory.resolve("config.yaml"),
+                Map.of(),
+                new SecretRedactor("model-secret"));
+
+        assertTrue(result.servers().isEmpty());
+        assertTrue(result.errors().isEmpty());
     }
 
     private static McpConfigLoadResult load(Path workspace, Path home, Map<String, String> environment) {

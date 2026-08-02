@@ -1,16 +1,24 @@
 package io.imiocode.mcp.config;
 
+import io.imiocode.config.EnvironmentPlaceholderResolver;
+import io.imiocode.config.MissingEnvironmentVariableException;
 import io.imiocode.tool.SecretRedactor;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /** 展开 MCP env/headers 中的启动环境占位符。 */
 public final class McpEnvironmentResolver {
-    private static final Pattern PLACEHOLDER = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)}");
+    private final EnvironmentPlaceholderResolver placeholderResolver;
+
+    public McpEnvironmentResolver() {
+        this(new EnvironmentPlaceholderResolver());
+    }
+
+    McpEnvironmentResolver(EnvironmentPlaceholderResolver placeholderResolver) {
+        this.placeholderResolver = Objects.requireNonNull(placeholderResolver, "placeholderResolver");
+    }
 
     public Resolution resolve(
             McpServerConfig config,
@@ -33,39 +41,23 @@ public final class McpEnvironmentResolver {
                     config.initializationTimeout(),
                     config.callTimeout(),
                     config.source()));
-        } catch (MissingVariableException exception) {
-            return Resolution.failure(exception.variableName);
+        } catch (MissingEnvironmentVariableException exception) {
+            return Resolution.failure(exception.variableName());
         }
     }
 
-    private static Map<String, String> expandMap(
+    private Map<String, String> expandMap(
             Map<String, String> values,
             Map<String, String> environment,
             SecretRedactor redactor) {
         Map<String, String> expanded = new LinkedHashMap<>();
         values.forEach((key, value) -> expanded.put(
                 Objects.requireNonNull(key, "配置名称"),
-                expand(Objects.requireNonNull(value, "配置值"), environment, redactor)));
+                placeholderResolver.expand(
+                        Objects.requireNonNull(value, "配置值"),
+                        environment,
+                        redactor::registerSecret)));
         return Map.copyOf(expanded);
-    }
-
-    private static String expand(
-            String value,
-            Map<String, String> environment,
-            SecretRedactor redactor) {
-        Matcher matcher = PLACEHOLDER.matcher(value);
-        StringBuffer output = new StringBuffer();
-        while (matcher.find()) {
-            String name = matcher.group(1);
-            String replacement = environment.get(name);
-            if (replacement == null) {
-                throw new MissingVariableException(name);
-            }
-            redactor.registerSecret(replacement);
-            matcher.appendReplacement(output, Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(output);
-        return output.toString();
     }
 
     public record Resolution(ResolvedMcpServerConfig config, String missingVariable) {
@@ -79,14 +71,6 @@ public final class McpEnvironmentResolver {
 
         public boolean success() {
             return config != null;
-        }
-    }
-
-    private static final class MissingVariableException extends RuntimeException {
-        private final String variableName;
-
-        private MissingVariableException(String variableName) {
-            this.variableName = variableName;
         }
     }
 }

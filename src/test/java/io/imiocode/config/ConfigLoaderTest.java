@@ -204,6 +204,45 @@ class ConfigLoaderTest {
     }
 
     @Test
+    void expandsProviderEnvironmentPlaceholder() throws Exception {
+        writeYaml("""
+                provider: deepseek
+                model: deepseek-chat
+                providers:
+                  deepseek:
+                    api-key: ${CONFIG_TEST_API_KEY}
+                    base-url: ${CONFIG_TEST_BASE_URL}
+                """);
+
+        AppConfig config = loader.load(tempDirectory, Map.of(
+                "CONFIG_TEST_API_KEY", "placeholder-test-key",
+                "CONFIG_TEST_BASE_URL", "http://localhost:9876"));
+
+        assertEquals("placeholder-test-key", config.apiKey());
+        assertEquals(URI.create("http://localhost:9876"), config.baseUri());
+    }
+
+    @Test
+    void reportsMissingProviderPlaceholderWithoutLeakingOtherValues() throws Exception {
+        writeYaml("""
+                provider: deepseek
+                model: deepseek-chat
+                providers:
+                  deepseek:
+                    api-key: ${MISSING_CONFIG_TEST_KEY}
+                    base-url: https://should-not-appear.example
+                """);
+
+        ConfigException exception = assertThrows(
+                ConfigException.class,
+                () -> loader.load(tempDirectory, Map.of()));
+
+        assertTrue(exception.getMessage().contains("MISSING_CONFIG_TEST_KEY"));
+        assertTrue(exception.getMessage().contains("providers.deepseek.api-key"));
+        assertFalse(exception.getMessage().contains("should-not-appear"));
+    }
+
+    @Test
     void environmentOverridesOnlyMatchingYamlFields() throws Exception {
         writeYaml("""
                 provider: deepseek

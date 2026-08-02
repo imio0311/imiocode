@@ -1,11 +1,22 @@
 package io.imiocode.config;
 
+import io.imiocode.mcp.config.McpConfigLoadResult;
+import io.imiocode.mcp.config.McpConfigLoader;
+import io.imiocode.permission.PermissionSettings;
+import io.imiocode.permission.rule.PermissionRuleLoader;
+import io.imiocode.tool.SecretRedactor;
+
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 public final class ConfigLoader {
     static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(10);
@@ -13,13 +24,45 @@ public final class ConfigLoader {
     static final int DEFAULT_MAX_OUTPUT_TOKENS = 4096;
     static final int DEFAULT_THINKING_BUDGET_TOKENS = 1024;
     private final YamlConfigLoader yamlConfigLoader;
+    private final EnvironmentPlaceholderResolver placeholderResolver;
+    private final McpConfigLoader mcpConfigLoader;
+    private final PermissionRuleLoader permissionRuleLoader;
 
     public ConfigLoader() {
-        this(new YamlConfigLoader());
+        this(
+                new YamlConfigLoader(),
+                new EnvironmentPlaceholderResolver(),
+                new McpConfigLoader(),
+                new PermissionRuleLoader());
     }
 
     ConfigLoader(YamlConfigLoader yamlConfigLoader) {
+        this(
+                yamlConfigLoader,
+                new EnvironmentPlaceholderResolver(),
+                new McpConfigLoader(),
+                new PermissionRuleLoader());
+    }
+
+    ConfigLoader(
+            YamlConfigLoader yamlConfigLoader,
+            EnvironmentPlaceholderResolver placeholderResolver) {
+        this(
+                yamlConfigLoader,
+                placeholderResolver,
+                new McpConfigLoader(),
+                new PermissionRuleLoader());
+    }
+
+    ConfigLoader(
+            YamlConfigLoader yamlConfigLoader,
+            EnvironmentPlaceholderResolver placeholderResolver,
+            McpConfigLoader mcpConfigLoader,
+            PermissionRuleLoader permissionRuleLoader) {
         this.yamlConfigLoader = Objects.requireNonNull(yamlConfigLoader, "yamlConfigLoader");
+        this.placeholderResolver = Objects.requireNonNull(placeholderResolver, "placeholderResolver");
+        this.mcpConfigLoader = Objects.requireNonNull(mcpConfigLoader, "mcpConfigLoader");
+        this.permissionRuleLoader = Objects.requireNonNull(permissionRuleLoader, "permissionRuleLoader");
     }
 
     public AppConfig load(Map<String, String> environment) {
@@ -30,17 +73,101 @@ public final class ConfigLoader {
         Objects.requireNonNull(workingDirectory, "workingDirectory");
         Objects.requireNonNull(environment, "environment");
         ConfigDocument document = yamlConfigLoader.load(workingDirectory);
+        return buildAppConfig(document, environment, ignored -> { });
+    }
 
+    /** 一次读取根配置并装配应用、MCP、权限及共享脱敏器。 */
+    public RuntimeConfig loadAll(
+            Path workspace,
+            Path userHome,
+            Map<String, String> environment) {
+        Objects.requireNonNull(workspace, "workspace");
+        Objects.requireNonNull(userHome, "userHome");
+        Objects.requireNonNull(environment, "environment");
+
+        Path normalizedWorkspace = workspace.toAbsolutePath().normalize();
+        Path normalizedUserHome = userHome.toAbsolutePath().normalize();
+        Path configPath = normalizedWorkspace.resolve(YamlConfigLoader.FILE_NAME);
+        ConfigDocument document = yamlConfigLoader.load(normalizedWorkspace);
+
+        List<String> expandedSecrets = new ArrayList<>();
+        AppConfig app = buildAppConfig(document, environment, expandedSecrets::add);
+        SecretRedactor redactor = new SecretRedactor(app.apiKey());
+        expandedSecrets.forEach(redactor::registerSecret);
+
+        List<ConfigNotice> notices = new ArrayList<>();
+        McpConfigLoadResult mcp;
+        ConfigSource mcpSource;
+        if (document.mcp() != null) {
+            mcp = mcpConfigLoader.loadUnified(
+                    document.mcp(), configPath, environment, redactor);
+            mcpSource = ConfigSource.UNIFIED;
+        } else {
+            boolean legacyPresent = hasLegacyMcpConfig(normalizedWorkspace, normalizedUserHome);
+            mcp = mcpConfigLoader.loadLegacy(
+                    normalizedWorkspace, normalizedUserHome, environment, redactor);
+            mcpSource = legacyPresent ? ConfigSource.LEGACY : ConfigSource.DEFAULT;
+            if (legacyPresent) {
+                notices.add(new ConfigNotice(
+                        "legacy_mcp_config",
+                        "[配置] 正在兼容读取旧 MCP 配置，建议迁移到 config.yaml 的 mcp 区域。"));
+            }
+        }
+
+        PermissionSettings permissions;
+        ConfigSource permissionSource;
+        if (document.permissions() != null) {
+            permissions = permissionRuleLoader.loadUnified(document.permissions());
+            permissionSource = ConfigSource.UNIFIED;
+        } else {
+            boolean legacyPresent = hasLegacyPermissionConfig(normalizedWorkspace, normalizedUserHome);
+            permissions = permissionRuleLoader.loadLegacy(normalizedWorkspace, normalizedUserHome);
+            permissionSource = legacyPresent ? ConfigSource.LEGACY : ConfigSource.DEFAULT;
+            if (legacyPresent) {
+                notices.add(new ConfigNotice(
+                        "legacy_permission_config",
+                        "[配置] 正在兼容读取旧权限配置，建议迁移到 config.yaml 的 permissions 区域。"));
+            }
+        }
+
+        ConfigSource appSource = Files.exists(configPath, LinkOption.NOFOLLOW_LINKS)
+                ? ConfigSource.UNIFIED
+                : ConfigSource.DEFAULT;
+        return new RuntimeConfig(
+                app,
+                mcp,
+                permissions,
+                redactor,
+                new ConfigSourceSummary(appSource, mcpSource, permissionSource),
+                notices);
+    }
+
+    private AppConfig buildAppConfig(
+            ConfigDocument document,
+            Map<String, String> environment,
+            Consumer<String> secretRegistrar) {
         Provider provider = Provider.parse(firstNonBlank(environment.get("IMIO_PROVIDER"), document.provider()));
         String model = required(firstNonBlank(environment.get("IMIO_MODEL"), document.model()), "IMIO_MODEL / model");
         ProviderConfig providerConfig = document.providerConfig(provider);
         String apiKeyName = apiKeyName(provider);
+        String configuredApiKey = resolveYamlValue(
+                environment.get(apiKeyName),
+                providerConfig.apiKey(),
+                environment,
+                secretRegistrar,
+                "providers." + provider.configValue() + ".api-key");
         String apiKey = required(
-                firstNonBlank(environment.get(apiKeyName), providerConfig.apiKey()),
+                configuredApiKey,
                 apiKeyName + " / providers." + provider.configValue() + ".api-key");
         String baseUrlName = baseUrlName(provider);
+        String configuredBaseUrl = resolveYamlValue(
+                environment.get(baseUrlName),
+                providerConfig.baseUrl(),
+                environment,
+                ignored -> { },
+                "providers." + provider.configValue() + ".base-url");
         URI baseUri = parseUri(
-                firstNonBlank(environment.get(baseUrlName), providerConfig.baseUrl()),
+                configuredBaseUrl,
                 defaultBaseUri(provider),
                 baseUrlName + " / providers." + provider.configValue() + ".base-url");
         Duration connectTimeout = Duration.ofSeconds(mergePositiveInt(
@@ -223,6 +350,27 @@ public final class ConfigLoader {
         }
     }
 
+    private String resolveYamlValue(
+            String environmentOverride,
+            String yamlValue,
+            Map<String, String> environment,
+            Consumer<String> secretRegistrar,
+            String configPath) {
+        if (environmentOverride != null && !environmentOverride.isBlank()) {
+            return environmentOverride.trim();
+        }
+        if (yamlValue == null || yamlValue.isBlank()) {
+            return null;
+        }
+        try {
+            return placeholderResolver.expand(yamlValue.trim(), environment, secretRegistrar);
+        } catch (MissingEnvironmentVariableException exception) {
+            throw new ConfigException(
+                    "配置项 " + configPath + " 缺少环境变量 " + exception.variableName(),
+                    exception);
+        }
+    }
+
     private static String yamlName(String environmentName) {
         return switch (environmentName) {
             case "IMIO_CONNECT_TIMEOUT_SECONDS" -> "connect-timeout-seconds";
@@ -276,5 +424,21 @@ public final class ConfigLoader {
             text = text.substring(0, text.length() - 1);
         }
         return URI.create(text);
+    }
+
+    private static boolean hasLegacyMcpConfig(Path workspace, Path userHome) {
+        return exists(workspace.resolve(".imiocode").resolve("mcp.local.yaml"))
+                || exists(workspace.resolve(".imiocode").resolve("mcp.yaml"))
+                || exists(userHome.resolve(".imiocode").resolve("mcp.yaml"));
+    }
+
+    private static boolean hasLegacyPermissionConfig(Path workspace, Path userHome) {
+        return exists(workspace.resolve(".imiocode").resolve("permissions.local.yaml"))
+                || exists(workspace.resolve(".imiocode").resolve("permissions.yaml"))
+                || exists(userHome.resolve(".imiocode").resolve("permissions.yaml"));
+    }
+
+    private static boolean exists(Path path) {
+        return Files.exists(path, LinkOption.NOFOLLOW_LINKS);
     }
 }
