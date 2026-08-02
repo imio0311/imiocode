@@ -17,10 +17,10 @@
 - [ ] C8：两个 UI 命令不调用 LLM、不进入历史、不改变 Plan/Do 模式。（验证：伪客户端调用计数与历史快照。）
 - [ ] C9：重复切换到当前模式安全且输出确定，不产生异常或历史副作用。（验证：连续相同命令测试。）
 
-## 精简启动与输入区
+## 完整启动与精简输入区
 
-- [ ] C10：compact 启动区只包含产品版本、Provider/模型和工作目录，不含大型 Logo、边框 Status 或独立 Ready 行。（验证：内存终端快照。）
-- [ ] C11：verbose 启动区继续包含现有完整面板、模型、目录和状态。（验证：旧布局断言显式使用 verbose。）
+- [ ] C10：compact 与 verbose 在相同终端能力下生成同一启动面板；FULL 包含 Logo、边框、产品版本、Provider、模型、目录和 Ready。（验证：两种详细度的内存终端快照相等。）
+- [ ] C11：窄富终端按原规则保留边框和环境字段并省略 Logo；PLAIN 使用无 ANSI 的多行环境摘要。（验证：COMPACT/PLAIN 布局断言。）
 - [ ] C12：compact 富终端输入提示为短 `› `，纯文本回退为 `> `。（验证：布局与内存终端测试。）
 - [ ] C13：compact 不打印输入顶部边框和 readLine 尾部状态栏，verbose 保持原行为。（验证：对同一输入比较捕获输出。）
 - [ ] C14：启动帮助只出现一次，并能发现 `/verbose`；不会每轮重复打印。（验证：真实进程输出计数。）
@@ -65,8 +65,8 @@
 
 ## 响应式与兼容性
 
-- [ ] C41：FULL、COMPACT、PLAIN 终端能力与 UiVerbosity 两个维度组合正确。（验证：六种组合布局测试。）
-- [ ] C42：20、40、60、100 列下启动行、工具行、模式提示和错误行均不越界。（验证：JLine 列宽断言。）
+- [ ] C41：启动面板只受 FULL、COMPACT、PLAIN 终端能力影响；输入区和事件输出继续受 UiVerbosity 控制。（验证：布局接口与六种对话组合测试。）
+- [ ] C42：20、40、60、80、100、200 列下启动行、工具行、模式提示和错误行均不越界。（验证：JLine 列宽断言。）
 - [ ] C43：窄终端的中文路径、长命令和 MCP 名称不会切断 Unicode 代理字符。（验证：边界字符串测试。）
 - [ ] C44：dumb terminal 不输出 ANSI，使用 `> `、`[ok]`、`[fail]` 且语义完整。（验证：内存 dumb terminal 输出扫描。）
 - [ ] C45：Alt+Enter、Ctrl+C、`/exit`、`/quit`、`/plan`、`/do`、`/compact` 均保持通过。（验证：现有终端与会话回归测试。）
@@ -83,14 +83,15 @@
 - [ ] C50：配置、策略、布局、摘要、JLine 和 ConversationLoop 聚焦测试全部通过。（验证：运行指定 Maven 测试，0 failures、0 errors。）
 - [ ] C51：三个 Provider、Agent、工具、权限、MCP 和上下文测试行为不变。（验证：JDK 21 全量测试。）
 - [ ] C52：`mvn clean package` BUILD SUCCESS，记录 tests、failures、errors、skipped。（验证：Maven 输出与 Surefire 报告。）
-- [ ] C53：shaded JAR 存在且能以默认 compact 启动和退出。（验证：真实 Java 进程退出码为 0。）
+- [ ] C53：shaded JAR 存在，默认 compact 可观察到恢复后的完整启动面板并正常退出。（验证：真实 Java 进程退出码为 0。）
 - [ ] C54：Git 提交不包含 `claude.md`、`hello.txt` 或忽略的本地 `config.yaml`。（验证：每次暂存名单及最终状态。）
+- [ ] C55：除启动面板外，compact 的短提示符、Thinking/Usage/状态过滤、工具单行摘要、MCP 降噪、权限和错误可见性全部保持不变。（验证：原 UI 聚焦测试与真实 compact 工具回合回归通过。）
 
 ## 端到端场景
 
-- [ ] E1：默认 compact——真实或可控 LLM 返回 Thinking → ReadFile 工具 → Usage → 最终回答；终端只看到一条 Read 完成行和完整回答。
-- [ ] E2：切换 verbose——输入 `/verbose` 后再次执行同类请求；终端恢复 Thinking、Usage、queued/running/完成详细行。
-- [ ] E3：切回 compact——输入 `/compact-ui` 后第三轮再次精简，且三条切换命令均未进入模型请求。
+- [ ] E1：默认 compact——启动时看到原完整响应式面板；可控 LLM 返回 Thinking → ReadFile → Usage → 最终回答后，终端只新增一条 Read 完成行和完整回答。
+- [ ] E2：切换 verbose——输入 `/verbose` 后不重绘启动面板；再次执行同类请求时恢复 Thinking、Usage、queued/running/完成详细行。
+- [ ] E3：切回 compact——输入 `/compact-ui` 后不重绘启动面板，第三轮再次精简，且切换命令均未进入模型请求。
 - [ ] E4：失败可见——compact 中执行一个失败工具，看到唯一失败摘要与安全错误，Agent 后续仍可回复。
 - [ ] E5：权限可见——compact 中触发需要 HITL 的操作，确认界面完整，拒绝后结果可见且未执行工具副作用。
 - [ ] E6：窄终端——40 列下运行同一请求，启动、工具、回答和输入提示均不越界。

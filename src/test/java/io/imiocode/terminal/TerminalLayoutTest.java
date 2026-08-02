@@ -66,21 +66,22 @@ class TerminalLayoutTest {
     }
 
     @Test
-    void compactVerbosityUsesThreeCoreLinesAndShortPrompts() {
+    void welcomeRestoresOriginalPanelWhileCompactConversationRemainsShort() {
         UiContext shortContext = new UiContext(
                 "ImioCode", "dev", "deepseek", "deepseek-chat", Path.of("work"));
 
+        String welcome = String.join("\n", layout.welcome(
+                shortContext, UiState.READY, 100, TerminalMode.FULL));
+        assertTrue(welcome.contains("___"));
+        assertTrue(welcome.contains("┌"));
+        assertTrue(welcome.contains("ImioCode vdev"));
+        assertTrue(welcome.contains("Provider  deepseek"));
+        assertTrue(welcome.contains("Model     deepseek-chat"));
+        assertTrue(welcome.contains("Directory"));
+        assertTrue(welcome.contains(shortContext.workingDirectory().toString()));
+        assertTrue(welcome.contains("Status    Ready"));
+
         for (TerminalMode mode : TerminalMode.values()) {
-            List<String> welcome = layout.welcome(
-                    shortContext, UiState.READY, 100, mode, UiVerbosity.COMPACT);
-            assertEquals(3, welcome.size());
-            String text = String.join("\n", welcome);
-            assertTrue(text.contains("ImioCode vdev"));
-            assertTrue(text.contains("deepseek"));
-            assertTrue(text.contains("deepseek-chat"));
-            assertTrue(text.contains("work"));
-            assertTrue(!text.contains("Status"));
-            assertTrue(!text.contains("Ready"));
             assertEquals("", layout.inputTop(100, mode, UiVerbosity.COMPACT));
             assertEquals("", layout.statusLine(
                     shortContext, UiState.THINKING, 100, mode, UiVerbosity.COMPACT));
@@ -93,16 +94,38 @@ class TerminalLayoutTest {
     void compactAndVerboseLayoutsFitEverySupportedWidth() {
         for (int width : List.of(20, 40, 60, 80, 100, 200)) {
             TerminalMode mode = TerminalMode.select(width, true);
+            layout.welcome(context, UiState.READY, width, mode)
+                    .forEach(line -> assertTrue(
+                            TerminalLayout.columns(line) <= width,
+                            () -> "启动面板宽度 " + width + " 越界: " + line));
             for (UiVerbosity verbosity : UiVerbosity.values()) {
-                layout.welcome(context, UiState.READY, width, mode, verbosity)
-                        .forEach(line -> assertTrue(
-                                TerminalLayout.columns(line) <= width,
-                                () -> verbosity + " 宽度 " + width + " 越界: " + line));
                 assertTrue(TerminalLayout.columns(
                         layout.inputTop(width, mode, verbosity)) <= width);
                 assertTrue(TerminalLayout.columns(layout.statusLine(
                         context, UiState.STREAMING, width, mode, verbosity)) <= width);
             }
         }
+    }
+
+    @Test
+    void narrowAndPlainWelcomeKeepOriginalResponsiveFallbacks() {
+        UiContext shortContext = new UiContext(
+                "ImioCode", "dev", "deepseek", "deepseek-chat", Path.of("work"));
+
+        String narrow = String.join("\n", layout.welcome(
+                shortContext, UiState.READY, 40, TerminalMode.COMPACT));
+        assertTrue(narrow.contains("┌"));
+        assertTrue(narrow.contains("Provider"));
+        assertTrue(narrow.contains("Status"));
+        assertTrue(!narrow.contains("|_ _|"));
+
+        String plain = String.join("\n", layout.welcome(
+                shortContext, UiState.READY, 100, TerminalMode.PLAIN));
+        assertTrue(plain.contains("ImioCode vdev"));
+        assertTrue(plain.contains("deepseek | deepseek-chat"));
+        assertTrue(plain.contains("目录:"));
+        assertTrue(plain.contains(shortContext.workingDirectory().toString()));
+        assertTrue(plain.contains("状态: Ready"));
+        assertTrue(!plain.contains("\u001B["));
     }
 }

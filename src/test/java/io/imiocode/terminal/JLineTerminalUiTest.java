@@ -232,6 +232,8 @@ class JLineTerminalUiTest {
         ToolCall call = new ToolCall(
                 "c1", "read_file", JsonNodeFactory.instance.objectNode().put("path", "a.txt"));
 
+        ui.showWelcome(new UiContext(
+                "ImioCode", "dev", "deepseek", "deepseek-chat", Path.of("work")));
         ui.updateState(UiState.THINKING);
         ui.beginThinking();
         ui.appendThinkingText("hidden thinking");
@@ -247,6 +249,11 @@ class JLineTerminalUiTest {
         ui.close();
 
         String text = output.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("ImioCode vdev"), () -> "实际输出: " + text);
+        assertTrue(text.contains("deepseek | deepseek-chat"), () -> "实际输出: " + text);
+        assertTrue(text.contains("目录:"), () -> "实际输出: " + text);
+        assertTrue(text.contains("状态: Ready"), () -> "实际输出: " + text);
+        assertTrue(!text.contains("状态: Thinking"));
         assertTrue(text.contains("[ok] Read a.txt (0.1s)"), () -> "实际输出: " + text);
         assertTrue(!text.contains("hidden thinking"));
         assertTrue(!text.contains("[usage]"));

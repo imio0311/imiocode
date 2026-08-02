@@ -214,6 +214,10 @@ class ConversationLoopTest {
                 assertTrue(process.waitFor(20, TimeUnit.SECONDS), "应用进程未在时限内退出");
                 String output = outputFuture.get(2, TimeUnit.SECONDS);
                 assertEquals(0, process.exitValue(), output);
+                assertTrue(output.contains("ImioCode v"), output);
+                assertTrue(output.contains("deepseek | deepseek-chat"), output);
+                assertTrue(output.contains("目录:"), output);
+                assertTrue(output.contains("状态: Ready"), output);
                 assertTrue(output.contains("[ok] Read pom.xml"), output);
                 assertTrue(!output.contains("LOW"), output);
                 assertTrue(!output.contains("[thinking]"), output);
@@ -281,6 +285,11 @@ class ConversationLoopTest {
                 assertTrue(process.waitFor(20, TimeUnit.SECONDS), "应用进程未在时限内退出");
                 String output = outputFuture.get(2, TimeUnit.SECONDS);
                 assertEquals(0, process.exitValue(), output);
+                assertTrue(output.contains("ImioCode v"), output);
+                assertTrue(output.contains("状态: Ready"), output);
+                assertEquals(1, output.lines()
+                        .filter(line -> line.contains("ImioCode v"))
+                        .count(), output);
                 assertTrue(output.contains("[UI] 详细模式"), output);
                 assertTrue(output.contains("[thinking] inspect"), output);
                 assertTrue(output.contains("[usage] input=7 · output=3"), output);

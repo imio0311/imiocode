@@ -11,7 +11,7 @@
 | 修改 | `src/main/java/io/imiocode/config/AppConfig.java` | 携带 `UiConfig` 并保持构造兼容 |
 | 新建 | `src/main/java/io/imiocode/terminal/UiDisplayPolicy.java` | compact/verbose 可见性策略 |
 | 修改 | `src/main/java/io/imiocode/terminal/TerminalUi.java` | 模式读取、切换与提示接口 |
-| 修改 | `src/main/java/io/imiocode/terminal/TerminalLayout.java` | 精简启动区、提示符和状态布局 |
+| 修改 | `src/main/java/io/imiocode/terminal/TerminalLayout.java` | 原响应式启动面板、精简提示符和状态布局 |
 | 修改 | `src/main/java/io/imiocode/terminal/ToolSummaryFormatter.java` | 工具完成态单行摘要 |
 | 修改 | `src/main/java/io/imiocode/terminal/JLineTerminalUi.java` | 应用策略并渲染两种模式 |
 | 修改 | `src/main/java/io/imiocode/conversation/ConversationLoop.java` | `/verbose`、`/compact-ui` 命令 |
@@ -27,6 +27,84 @@
 | 修改 | `README.md` | UI 模式和命令说明 |
 | 新建 | `docs/ui-compact/checklist.md` | 行为验收清单 |
 | 新建 | `docs/ui-compact/acceptance-report.md` | 实际验收证据 |
+
+## 本次增量修订：恢复启动面板
+
+> T1-T17 已在上一轮完成。本次只执行 T18-T21，其他实现保持不变。
+
+## T18：恢复 TerminalLayout 启动入口
+
+**文件：**
+
+- `src/main/java/io/imiocode/terminal/TerminalLayout.java`
+- `src/test/java/io/imiocode/terminal/TerminalLayoutTest.java`
+
+**依赖：** 已完成的 T5
+
+**步骤：**
+
+1. 让四参数 `welcome` 直接生成原 FULL/COMPACT/PLAIN 响应式面板。
+2. 移除带 `UiVerbosity` 的 `welcome` 重载和仅三行的 `compactWelcome`，防止启动布局再次受详细度影响。
+3. 保持 `inputTop`、`primaryPrompt`、`continuationPrompt` 和 `statusLine` 的 compact/verbose 分支不变。
+4. 更新布局测试，断言宽富终端包含 Logo、边框、完整环境字段和 Ready，窄终端与纯文本仍安全降级。
+
+**验证：** 运行 `mvn -Dtest=TerminalLayoutTest test`，期望所有启动行在 20、40、60、80、100、200 列均不越界。
+
+## T19：让 JLine 始终使用完整启动面板
+
+**文件：**
+
+- `src/main/java/io/imiocode/terminal/JLineTerminalUi.java`
+- `src/test/java/io/imiocode/terminal/JLineTerminalUiTest.java`
+- `src/test/java/io/imiocode/conversation/ConversationLoopTest.java`
+
+**依赖：** T18
+
+**步骤：**
+
+1. `showWelcome` 调用不带 `UiVerbosity` 的启动入口。
+2. compact 与 verbose 终端测试对同一能力断言相同启动面板。
+3. 真实 compact 进程断言启动面板完整，同时继续断言不显示 Thinking、Usage、LOW 和工具中间态。
+4. 保持 `/verbose`、`/compact-ui`、短输入提示和事件过滤测试不变。
+
+**验证：** 运行 `mvn -Dtest=JLineTerminalUiTest,ConversationLoopTest test`，期望启动恢复且精简对话回归通过。
+
+## T20：同步文档与验收清单
+
+**文件：**
+
+- `README.md`
+- `docs/ui-compact/spec.md`
+- `docs/ui-compact/plan.md`
+- `docs/ui-compact/task.md`
+- `docs/ui-compact/checklist.md`
+- `docs/ui-compact/acceptance-report.md`
+
+**依赖：** T18、T19
+
+**步骤：**
+
+1. 删除“compact 使用三行精简启动区”的旧说明。
+2. 说明两种详细度使用同一原响应式启动面板，模式切换只影响后续对话。
+3. 更新 checklist 的启动快照、宽度、真实进程和“不影响其他行为”条目。
+4. 验收报告记录实际启动输出、测试数量与 tmux/真实进程结果。
+
+**验证：** 搜索旧启动描述应为 0 命中，文档明确包含 Logo、Ready 和“对话保持精简”。
+
+## T21：全量验收与隔离提交
+
+**文件：** 本次增量变更文件
+
+**依赖：** T18-T20
+
+**步骤：**
+
+1. 使用 JDK 21 运行 `mvn clean package`。
+2. 启动真实 shaded JAR，观察恢复后的启动面板并正常退出。
+3. 运行 `git diff --check` 和敏感信息模式扫描。
+4. 只暂存本次增量文件，排除 `claude.md`、`hello.txt` 和本地 `config.yaml`，提交到当前本地分支但不推送。
+
+**验证：** BUILD SUCCESS、0 failures、0 errors；真实进程退出码 0；最终工作树只保留用户原有文件。
 
 ## T1：定义 UI 配置类型
 
@@ -113,7 +191,7 @@
 **步骤：**
 
 1. 布局方法接收 `UiVerbosity`，保留 verbose 现有布局。
-2. compact 启动区只输出产品版本、Provider/模型、工作目录。
+2. 启动区复用原响应式完整面板，compact 只精简启动后的输入与事件输出。
 3. compact 富终端提示符使用 `› `，纯文本使用 `> `。
 4. compact 不生成输入顶部边框和滚动状态栏。
 5. 覆盖 FULL/COMPACT/PLAIN 终端能力与 20、40、60、100 列宽度。
@@ -346,4 +424,6 @@ T1 --> T2 ------------------------------┐
        T5 --------┐                     ├--> T13 --> T15 --> T16 --> T17
        T6 --> T7 -┴--> T8               │
 T2 + T8 ----------------------> T12 --> T14
+
+已完成 T1-T17 --> T18 --> T19 --> T20 --> T21
 ```

@@ -12,12 +12,13 @@ config.yaml ui.verbosity
 UiConfig / UiVerbosity
         ↓
 ImioCodeApplication 创建 JLineTerminalUi
-        ↓
-ConversationLoop 继续转发全部事件
-        ↓
-JLineTerminalUi + UiDisplayPolicy
-        ├─ compact：过滤过程噪声，输出完成摘要
-        └─ verbose：保持当前详细输出
+        ├─ 启动 → TerminalLayout.welcome(TerminalMode)
+        │          └─ 始终渲染原响应式完整面板
+        └─ 对话 → ConversationLoop 继续转发全部事件
+                   ↓
+             JLineTerminalUi + UiDisplayPolicy
+             ├─ compact：过滤过程噪声，输出完成摘要
+             └─ verbose：保持当前详细输出
 ```
 
 `ConversationLoop` 不删除 Thinking、Usage 或工具事件，只负责识别 `/verbose`、`/compact-ui` 并切换终端策略。所有事件仍到达 `TerminalUi`，由展示策略决定是否打印。这保证切换显示模式不会改变 Agent 行为，也使权限、错误和安全提醒始终经过原路径。
@@ -26,6 +27,8 @@ JLineTerminalUi + UiDisplayPolicy
 
 - `TerminalMode`：根据 ANSI 能力和宽度选择 FULL / COMPACT / PLAIN 布局能力。
 - `UiVerbosity`：根据配置或命令选择 COMPACT / VERBOSE 信息密度。
+
+启动面板只使用 `TerminalMode`，不再读取 `UiVerbosity`。输入区、状态栏、Thinking、Usage、工具、MCP 和上下文事件继续由两个维度共同决定。这样可以恢复原启动视觉，又不会扩大 compact 模式的后续输出。
 
 ## 核心数据结构
 
@@ -92,6 +95,8 @@ default void showVerbosityChanged(UiVerbosity verbosity);
 
 默认实现保持兼容：非 JLine 测试终端可以继续编译。`JLineTerminalUi` 用 `AtomicReference<UiVerbosity>` 保存当前会话模式，切换只影响后续事件。
 
+本次修订不新增核心数据结构。`UiVerbosity` 仍用于对话详细度，但不再传入启动面板入口。
+
 ## 模块设计
 
 ### 配置模块
@@ -130,19 +135,24 @@ verbose 策略复用当前全部展示行为。
 
 ### 响应式布局模块
 
-**职责：** 根据 `TerminalMode + UiVerbosity` 生成启动区、输入提示和状态区域。
+**职责：** 启动区只根据 `TerminalMode` 生成原响应式完整面板；输入提示和状态区域继续根据 `TerminalMode + UiVerbosity` 生成。
 
-compact 富终端建议输出：
+启动入口固定为：
 
-```text
-ImioCode v0.2.0-SNAPSHOT
-deepseek · deepseek-chat
-D:\project
+```java
+List<String> welcome(
+        UiContext context,
+        UiState state,
+        int requestedWidth,
+        TerminalMode mode);
 ```
 
-compact 纯文本输出使用 `provider | model`，不输出 ANSI。compact 输入提示使用短 `› `（纯文本回退为 `> `），不打印输入顶部边框和每次 readLine 后的状态栏。
+- FULL：输出 Logo、边框、产品版本、Provider、模型、目录和状态。
+- COMPACT：保留原窄富终端边框及环境字段，省略 Logo。
+- PLAIN：输出无 ANSI 的产品版本、Provider/模型、目录和状态多行摘要。
+- `JLineTerminalUi.showWelcome` 只调用上述入口，不读取当前 `verbosity`。
 
-verbose 保持当前启动面板、输入边框、主提示符和状态栏。所有布局继续使用 JLine 列宽计算与 `TerminalLayout.truncate`。
+compact 对话仍使用短 `› `（纯文本回退为 `> `），不打印输入顶部边框和每次 readLine 后的状态栏；verbose 对话保持现有输入面板、主提示符和状态栏。所有布局继续使用 JLine 列宽计算与 `TerminalLayout.truncate`。
 
 ### Thinking 与状态过滤
 
@@ -238,15 +248,16 @@ ConfigLoader
           ↓
 ImioCodeApplication
    └─ JLineTerminalUi(redactor, verbosity)
-          ↓
-ConversationLoop
-   ├─ 普通请求 → Agent/Session → 全量事件 → TerminalUi
-   ├─ /verbose → setVerbosity(VERBOSE)
-   └─ /compact-ui → setVerbosity(COMPACT)
-                                      ↓
-                              UiDisplayPolicy
-                              ├─ 可见 → Layout/Formatter → writer
-                              └─ 隐藏 → 不执行 I/O
+          ├─ showWelcome → TerminalLayout.welcome(TerminalMode)
+          │                 └─ 原响应式完整启动面板
+          └─ ConversationLoop
+             ├─ 普通请求 → Agent/Session → 全量事件 → TerminalUi
+             ├─ /verbose → setVerbosity(VERBOSE)
+             └─ /compact-ui → setVerbosity(COMPACT)
+                                                ↓
+                                        UiDisplayPolicy
+                                        ├─ 可见 → Layout/Formatter → writer
+                                        └─ 隐藏 → 不执行 I/O
 ```
 
 工具事件路径：
@@ -275,9 +286,9 @@ src/main/java/io/imiocode/
 │   └── ConversationLoop.java                — /verbose、/compact-ui
 └── terminal/
     ├── TerminalUi.java                      — 模式读取、切换和确认接口
-    ├── JLineTerminalUi.java                 — 策略过滤与两种渲染
+    ├── JLineTerminalUi.java                 — 完整启动面板与对话策略过滤
     ├── UiDisplayPolicy.java                 — 可见性决策
-    ├── TerminalLayout.java                  — compact/verbose 响应式布局
+    ├── TerminalLayout.java                  — 原启动面板与 compact/verbose 对话布局
     └── ToolSummaryFormatter.java            — compact 单行工具摘要
 
 src/test/java/io/imiocode/
@@ -310,6 +321,8 @@ README.md                                   — 模式与命令说明
 | 模式状态 | `AtomicReference<UiVerbosity>` | 终端事件可能来自异步流，运行时切换需要安全可见 |
 | 配置归属 | `AppConfig.ui` | UI 是应用级启动配置，与当前统一 `config.yaml` 结构一致 |
 | 终端能力与详细度 | 保持 `TerminalMode` 和 `UiVerbosity` 分离 | 避免把“40 列紧凑布局”与“隐藏过程信息”混为一谈 |
+| 启动面板维度 | 只依赖 `TerminalMode` | 恢复品牌面板的同时，确保 compact 对话过滤完全不变 |
+| 启动接口 | 移除带 `UiVerbosity` 的 welcome 分支 | 从接口层防止后续再次把对话详细度误用于启动面板 |
 | 工具去重 | compact 只接受完成态 | 不需要保存调用 ID 集合，天然一调用一完成行，常数状态 |
 | Thinking 隐藏 | UI 方法入口直接跳过 | 不缓存正文、不回放，不改变对话历史 |
 | 命令实现 | `ConversationLoop` 本地拦截 | 与 `/plan`、`/do`、`/compact` 现有模式一致，确保不进入模型 |

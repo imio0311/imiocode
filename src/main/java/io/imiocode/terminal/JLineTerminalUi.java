@@ -109,7 +109,7 @@ public final class JLineTerminalUi implements TerminalUi {
         this.context = Objects.requireNonNull(context, "context");
         TerminalMode mode = currentMode();
         for (String line : layout.welcome(
-                context, state.get(), terminalWidth(), mode, verbosity.get())) {
+                context, state.get(), terminalWidth(), mode)) {
             printStyled(line, AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN), mode);
         }
         writer.flush();
