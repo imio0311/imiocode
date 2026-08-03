@@ -28,6 +28,7 @@ public final class ConversationSession implements AutoCloseable {
     private final List<SystemReminder> pendingReminders = new ArrayList<>();
     private final Agent agent;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean active = new AtomicBoolean();
 
     public ConversationSession(Agent agent) {
         this.agent = Objects.requireNonNull(agent, "agent");
@@ -65,30 +66,36 @@ public final class ConversationSession implements AutoCloseable {
         if (closed.get()) {
             throw new ConversationException("会话已关闭", false, true, false);
         }
+        if (!active.compareAndSet(false, true)) {
+            throw new ConversationException("会话正在执行任务", true, false, false);
+        }
+        try {
+            ChatMessage userMessage = new ChatMessage(MessageRole.USER, userInput);
+            List<SystemReminder> reminders;
+            synchronized (pendingReminders) {
+                reminders = List.copyOf(pendingReminders);
+                pendingReminders.clear();
+            }
+            List<ChatMessage> committed;
+            synchronized (history) {
+                committed = List.copyOf(history);
+            }
 
-        ChatMessage userMessage = new ChatMessage(MessageRole.USER, userInput);
-        List<SystemReminder> reminders;
-        synchronized (pendingReminders) {
-            reminders = List.copyOf(pendingReminders);
-            pendingReminders.clear();
+            AgentResult result = agent.run(
+                    new AgentRequest(committed, userMessage, reminders),
+                    listener::onAgentEvent
+            );
+            applyResultHistory(result);
+            if (!result.completed()) {
+                throw ConversationException.from(result);
+            }
+            if (closed.get()) {
+                throw new ConversationException("会话已关闭", false, true, result.toolsExecuted());
+            }
+            return result.finalResponse().orElseThrow();
+        } finally {
+            active.set(false);
         }
-        List<ChatMessage> committed;
-        synchronized (history) {
-            committed = List.copyOf(history);
-        }
-
-        AgentResult result = agent.run(
-                new AgentRequest(committed, userMessage, reminders),
-                listener::onAgentEvent
-        );
-        applyResultHistory(result);
-        if (!result.completed()) {
-            throw ConversationException.from(result);
-        }
-        if (closed.get()) {
-            throw new ConversationException("会话已关闭", false, true, result.toolsExecuted());
-        }
-        return result.finalResponse().orElseThrow();
     }
 
     private void applyResultHistory(AgentResult result) {
@@ -104,6 +111,24 @@ public final class ConversationSession implements AutoCloseable {
     public List<ChatMessage> historySnapshot() {
         synchronized (history) {
             return List.copyOf(history);
+        }
+    }
+
+    public boolean isActive() {
+        return active.get();
+    }
+
+    /** 仅用于已经通过外部完整性校验的会话恢复。 */
+    public void replaceHistory(List<ChatMessage> restoredHistory) {
+        Objects.requireNonNull(restoredHistory, "restoredHistory");
+        if (closed.get()) throw new IllegalStateException("会话已关闭");
+        if (active.get()) throw new IllegalStateException("会话正在执行任务");
+        synchronized (history) {
+            history.clear();
+            history.addAll(List.copyOf(restoredHistory));
+        }
+        synchronized (pendingReminders) {
+            pendingReminders.clear();
         }
     }
 

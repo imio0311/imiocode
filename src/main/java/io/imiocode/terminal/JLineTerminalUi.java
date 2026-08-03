@@ -384,6 +384,28 @@ public final class JLineTerminalUi implements TerminalUi {
     }
 
     @Override
+    public synchronized boolean confirmAction(ConfirmationPrompt prompt) {
+        Objects.requireNonNull(prompt, "prompt 不能为空");
+        if (closed.get()) return false;
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        TerminalMode mode = currentMode();
+        printStyled("[确认] " + prompt.title(),
+                AttributedStyle.DEFAULT.foreground(AttributedStyle.YELLOW), mode);
+        writer.println("目标: " + prompt.detail());
+        if (!prompt.risk().isBlank()) writer.println("风险: " + prompt.risk());
+        writer.println("确认执行？[y/N]");
+        writer.flush();
+        try {
+            String answer = lineReader.readLine(styledPrompt("选择> ", mode));
+            return answer != null && (answer.trim().equalsIgnoreCase("y")
+                    || answer.trim().equalsIgnoreCase("yes"));
+        } catch (UserInterruptException | EndOfFileException exception) {
+            return false;
+        }
+    }
+
+    @Override
     public synchronized boolean approve(McpLaunchRequest request) {
         Objects.requireNonNull(request, "request 不能为空");
         if (closed.get()) {

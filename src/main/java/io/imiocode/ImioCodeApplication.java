@@ -1,6 +1,15 @@
 package io.imiocode;
 
 import io.imiocode.agent.Agent;
+import io.imiocode.command.LocalCommandRegistry;
+import io.imiocode.command.builtin.CompactCommand;
+import io.imiocode.command.builtin.DoCommand;
+import io.imiocode.command.builtin.ExitCommand;
+import io.imiocode.command.builtin.HelpCommand;
+import io.imiocode.command.builtin.MemoryCommand;
+import io.imiocode.command.builtin.PlanCommand;
+import io.imiocode.command.builtin.SessionCommand;
+import io.imiocode.command.builtin.VerbosityCommand;
 import io.imiocode.config.AppConfig;
 import io.imiocode.config.ConfigException;
 import io.imiocode.config.ConfigLoader;
@@ -14,10 +23,19 @@ import io.imiocode.context.ConversationSummarizer;
 import io.imiocode.context.SummaryParser;
 import io.imiocode.context.ToolResultOffloader;
 import io.imiocode.context.ToolResultSpillStore;
-import io.imiocode.conversation.ConversationLoop;
 import io.imiocode.conversation.ConversationSession;
+import io.imiocode.instruction.FileInstructionLoader;
+import io.imiocode.instruction.InstructionLoadRequest;
+import io.imiocode.instruction.InstructionReminderFormatter;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmClientFactory;
+import io.imiocode.memory.LlmMemoryExtractor;
+import io.imiocode.memory.MarkdownMemoryStore;
+import io.imiocode.memory.MemoryManager;
+import io.imiocode.memory.MemoryReminderFormatter;
+import io.imiocode.memory.MemoryResponseParser;
+import io.imiocode.memory.MemorySafetyPolicy;
+import io.imiocode.memory.MemoryScope;
 import io.imiocode.mcp.config.McpConfigError;
 import io.imiocode.mcp.config.McpConfigLoadResult;
 import io.imiocode.mcp.jsonrpc.JsonRpcCodec;
@@ -28,6 +46,9 @@ import io.imiocode.prompt.EnvironmentContextCollector;
 import io.imiocode.prompt.EnvironmentReminderFormatter;
 import io.imiocode.prompt.PromptAssembler;
 import io.imiocode.prompt.SystemPromptBuilder;
+import io.imiocode.persistence.DefaultPersistentContextProvider;
+import io.imiocode.persistence.PersistenceEvent;
+import io.imiocode.persistence.PersistenceEventListener;
 import io.imiocode.permission.PermissionChecker;
 import io.imiocode.permission.PermissionCoordinator;
 import io.imiocode.permission.PermissionGate;
@@ -42,6 +63,10 @@ import io.imiocode.terminal.JLineTerminalUi;
 import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiContext;
 import io.imiocode.terminal.VersionResolver;
+import io.imiocode.runtime.ConversationCoordinator;
+import io.imiocode.runtime.ConversationLoop;
+import io.imiocode.session.JsonlSessionStore;
+import io.imiocode.session.SessionManager;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolLimits;
 import io.imiocode.tool.ToolRegistry;
@@ -72,6 +97,7 @@ public final class ImioCodeApplication {
     static int run() {
         LlmClient client = null;
         ConversationSession session = null;
+        ConversationCoordinator coordinator = null;
         TerminalUi terminal = null;
         McpManager mcpManager = null;
         try {
@@ -146,6 +172,7 @@ public final class ImioCodeApplication {
             ContextManager contextManager = new ContextManager(
                     config.context(), config.maxOutputTokens(), promptAssembler,
                     new ApproximateTokenEstimator(), offloader, summarizer);
+            Clock runtimeClock = Clock.systemDefaultZone();
             Agent agent = new Agent(
                     client,
                     registry,
@@ -153,13 +180,43 @@ public final class ImioCodeApplication {
                     config.maxOutputTokens(),
                     new EnvironmentContextCollector(
                             workspace,
-                            Clock.systemDefaultZone(),
+                            runtimeClock,
                             Duration.ofSeconds(2),
                             config.model()),
                     new EnvironmentReminderFormatter(),
                     permissionGate,
                     contextManager);
             session = new ConversationSession(agent);
+            MarkdownMemoryStore memoryStore = new MarkdownMemoryStore(userHome, workspace);
+            MemoryManager memoryManager = new MemoryManager(
+                    memoryStore,
+                    new MemorySafetyPolicy(config.memory(), redactor),
+                    config.memory());
+            TerminalUi eventTerminal = terminal;
+            PersistenceEventListener persistenceEvents = event -> renderPersistenceEvent(eventTerminal, event);
+            DefaultPersistentContextProvider persistentContext = new DefaultPersistentContextProvider(
+                    new FileInstructionLoader(),
+                    new InstructionLoadRequest(workspace, userHome, config.instructions()),
+                    new InstructionReminderFormatter(),
+                    memoryManager,
+                    new MemoryReminderFormatter(),
+                    memoryStore.path(MemoryScope.USER),
+                    memoryStore.path(MemoryScope.PROJECT),
+                    persistenceEvents);
+            SessionManager sessionManager = config.sessions().enabled()
+                    ? new SessionManager(new JsonlSessionStore(workspace, runtimeClock), config.sessions(), runtimeClock)
+                    : null;
+            coordinator = new ConversationCoordinator(
+                    session,
+                    sessionManager,
+                    config.sessions(),
+                    memoryManager,
+                    config.memory(),
+                    new LlmMemoryExtractor(client, config.memory(), new MemoryResponseParser(), redactor),
+                    persistentContext,
+                    persistenceEvents,
+                    runtimeClock);
+            LocalCommandRegistry commandRegistry = createCommandRegistry();
             String permissionMode = permissionSettings.mode().name()
                     .toLowerCase(java.util.Locale.ROOT);
             if (config.ui().verbosity() == UiVerbosity.COMPACT) {
@@ -170,7 +227,8 @@ public final class ImioCodeApplication {
                 terminal.printInfo("[权限] 当前模式: " + permissionMode);
             }
 
-            new ConversationLoop(session, terminal).run();
+            terminal.printInfo("[会话] " + coordinator.currentSession().id());
+            new ConversationLoop(coordinator, terminal, commandRegistry).run();
             return 0;
         } catch (ConfigException exception) {
             System.err.println("[配置错误] " + exception.getMessage());
@@ -182,7 +240,9 @@ public final class ImioCodeApplication {
             System.err.println("[运行错误] ImioCode 无法继续运行");
             return 1;
         } finally {
-            if (session != null) {
+            if (coordinator != null) {
+                coordinator.close();
+            } else if (session != null) {
                 session.close();
             } else if (client != null) {
                 client.close();
@@ -199,5 +259,33 @@ public final class ImioCodeApplication {
     private static String formatMcpError(McpConfigError error) {
         String server = error.serverName().isBlank() ? "" : "/" + error.serverName();
         return "[MCP" + server + "] " + error.safeMessage();
+    }
+
+    private static LocalCommandRegistry createCommandRegistry() {
+        LocalCommandRegistry registry = new LocalCommandRegistry();
+        registry.register(new HelpCommand());
+        registry.register(new PlanCommand());
+        registry.register(new DoCommand());
+        registry.register(new CompactCommand());
+        registry.register(new VerbosityCommand("verbose", UiVerbosity.VERBOSE));
+        registry.register(new VerbosityCommand("compact-ui", UiVerbosity.COMPACT));
+        registry.register(new SessionCommand());
+        registry.register(new MemoryCommand());
+        registry.register(new ExitCommand());
+        return registry;
+    }
+
+    private static void renderPersistenceEvent(TerminalUi terminal, PersistenceEvent event) {
+        if (event instanceof PersistenceEvent.SessionRestored restored) {
+            terminal.printInfo("[会话] 已恢复 " + restored.id() + "，" + restored.messageCount() + " 条消息");
+        } else if (event instanceof PersistenceEvent.SessionTailRecovered recovered) {
+            terminal.printError("[会话] 已隔离损坏尾部：" + recovered.quarantinedTail().getFileName());
+        } else if (event instanceof PersistenceEvent.MemoryUpdated updated) {
+            if (updated.added() + updated.updated() > 0) {
+                terminal.printInfo("[记忆] 新增 " + updated.added() + "，更新 " + updated.updated());
+            }
+        } else if (event instanceof PersistenceEvent.Warning warning) {
+            terminal.printError(warning.safeMessage());
+        }
     }
 }

@@ -62,6 +62,11 @@ public interface TerminalUi extends AutoCloseable, McpLaunchApprover, McpEventLi
         return PermissionReply.DENY;
     }
 
+    /** 通用破坏性操作确认，默认拒绝。 */
+    default boolean confirmAction(ConfirmationPrompt prompt) {
+        return false;
+    }
+
     @Override
     default boolean approve(McpLaunchRequest request) {
         return false;

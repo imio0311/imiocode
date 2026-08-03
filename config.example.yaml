@@ -35,6 +35,27 @@ ui:
   # compact：默认精简输出；verbose：显示状态、Thinking、Usage 和完整工具生命周期
   verbosity: compact
 
+instructions:
+  enabled: true
+  max-include-depth: 8
+  max-expanded-bytes: 131072
+
+sessions:
+  enabled: true
+  retention-days: 0       # 0 表示不按天自动删除
+  max-sessions: 0         # 0 表示不按数量自动删除
+
+memory:
+  enabled: true
+  # 开启后会把脱敏后的本轮用户/助手文本再次发给当前 LLM Provider；默认关闭
+  auto-extract: false
+  user-scope-enabled: true
+  project-scope-enabled: true
+  max-entries-per-scope: 200
+  max-entry-chars: 1000
+  max-file-bytes: 262144
+  extraction-output-tokens: 1024
+
 mcp:
   servers:
     context7:

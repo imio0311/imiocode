@@ -1,0 +1,15 @@
+package io.imiocode.command.builtin;
+
+import io.imiocode.agent.AgentMode;
+import io.imiocode.command.*;
+import java.util.List;
+
+public final class PlanCommand implements LocalCommand {
+    public String name() { return "plan"; }
+    public String usage() { return "/plan"; }
+    public CommandResult execute(CommandContext context, List<String> arguments) {
+        requireEmpty(arguments); context.services().switchMode(AgentMode.PLAN);
+        return CommandResult.handled(CommandMessage.info("[模式] Plan：仅启用只读工具"));
+    }
+    private static void requireEmpty(List<String> args) { if (!args.isEmpty()) throw new IllegalArgumentException("/plan 不接受参数"); }
+}

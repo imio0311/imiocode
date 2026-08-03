@@ -249,11 +249,15 @@ public final class ConfigLoader {
         ConfigDocument.UiDocument uiDocument = document.ui();
         UiConfig ui = new UiConfig(UiVerbosity.parse(
                 uiDocument == null ? null : uiDocument.verbosity()));
+        InstructionsConfig instructions = buildInstructionsConfig(document.instructions());
+        SessionsConfig sessions = buildSessionsConfig(document.sessions());
+        MemoryConfig memory = buildMemoryConfig(document.memory());
 
         try {
             return new AppConfig(
                     provider, model, apiKey, baseUri, connectTimeout, requestTimeout,
-                    maxOutputTokens, thinking, agent, context, ui);
+                    maxOutputTokens, thinking, agent, context, ui,
+                    instructions, sessions, memory);
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("配置无效：" + exception.getMessage(), exception);
         }
@@ -321,6 +325,59 @@ public final class ConfigLoader {
             return parsed;
         } catch (NumberFormatException exception) {
             throw new ConfigException("配置项 " + name + " 必须是正整数", exception);
+        }
+    }
+
+    private static InstructionsConfig buildInstructionsConfig(
+            ConfigDocument.InstructionsDocument document) {
+        InstructionsConfig defaults = InstructionsConfig.defaults();
+        try {
+            return new InstructionsConfig(
+                    document == null || document.enabled() == null ? defaults.enabled() : document.enabled(),
+                    document == null || document.maxIncludeDepth() == null
+                            ? defaults.maxIncludeDepth() : document.maxIncludeDepth(),
+                    document == null || document.maxExpandedBytes() == null
+                            ? defaults.maxExpandedBytes() : document.maxExpandedBytes());
+        } catch (IllegalArgumentException exception) {
+            throw new ConfigException("配置无效：" + exception.getMessage(), exception);
+        }
+    }
+
+    private static SessionsConfig buildSessionsConfig(ConfigDocument.SessionsDocument document) {
+        SessionsConfig defaults = SessionsConfig.defaults();
+        try {
+            return new SessionsConfig(
+                    document == null || document.enabled() == null ? defaults.enabled() : document.enabled(),
+                    document == null || document.retentionDays() == null
+                            ? defaults.retentionDays() : document.retentionDays(),
+                    document == null || document.maxSessions() == null
+                            ? defaults.maxSessions() : document.maxSessions());
+        } catch (IllegalArgumentException exception) {
+            throw new ConfigException("配置无效：" + exception.getMessage(), exception);
+        }
+    }
+
+    private static MemoryConfig buildMemoryConfig(ConfigDocument.MemoryDocument document) {
+        MemoryConfig defaults = MemoryConfig.defaults();
+        try {
+            return new MemoryConfig(
+                    document == null || document.enabled() == null ? defaults.enabled() : document.enabled(),
+                    document == null || document.autoExtract() == null
+                            ? defaults.autoExtract() : document.autoExtract(),
+                    document == null || document.userScopeEnabled() == null
+                            ? defaults.userScopeEnabled() : document.userScopeEnabled(),
+                    document == null || document.projectScopeEnabled() == null
+                            ? defaults.projectScopeEnabled() : document.projectScopeEnabled(),
+                    document == null || document.maxEntriesPerScope() == null
+                            ? defaults.maxEntriesPerScope() : document.maxEntriesPerScope(),
+                    document == null || document.maxEntryChars() == null
+                            ? defaults.maxEntryChars() : document.maxEntryChars(),
+                    document == null || document.maxFileBytes() == null
+                            ? defaults.maxFileBytes() : document.maxFileBytes(),
+                    document == null || document.extractionOutputTokens() == null
+                            ? defaults.extractionOutputTokens() : document.extractionOutputTokens());
+        } catch (IllegalArgumentException exception) {
+            throw new ConfigException("配置无效：" + exception.getMessage(), exception);
         }
     }
 

@@ -120,3 +120,83 @@ context:
 
 超过阈值的工具结果会以 UTF-8 写入 `.imiocode/tool-results/`，对话中仅保留预览、相对路径和
 `read_file` 提示。该目录默认被 Git 与常规 Glob 扫描忽略，但模型可以用明确路径读取其中的文件。
+
+## 跨会话指令、会话与记忆（CH9）
+
+### 项目指令 `MEWCODE.md`
+
+ImioCode 会在每个用户轮次开始时加载以下指令，越靠后的项目近端文件优先级越高：
+
+1. 用户级：`%USERPROFILE%/.imiocode/MEWCODE.md`
+2. Git 项目根目录到当前工作目录沿途的 `MEWCODE.md`
+
+项目指令可以用独占一行的相对路径 include 拆分模块：
+
+```markdown
+@include docs/java-style.md
+@include "docs/team conventions.md"
+```
+
+include 不能使用绝对路径或 `..`，也不能通过符号链接逃离当前指令根目录。指令通过
+`system-reminder` 消息注入，不进入 System Prompt，也不会写入会话历史。
+
+### 会话存档
+
+成功完成的对话轮次会以崩溃安全的 JSONL 事务保存到 `.imiocode/sessions/`。每次启动默认创建新会话，
+不会静默恢复旧历史；需要时使用：
+
+```text
+/session current
+/session list
+/session new
+/session resume <会话ID>
+/session delete <会话ID>
+```
+
+删除非当前会话必须再次确认。损坏的未提交尾部会先隔离为 `*.corrupt-*` 再恢复到最后完整提交；
+已提交数据的中部损坏会被拒绝，避免加载错误历史。
+
+### 双层记忆
+
+用户级记忆保存在 `%USERPROFILE%/.imiocode/memories.md`，项目级记忆保存在
+`.imiocode/memories.md`。项目记忆发生冲突时优先于用户记忆。可用以下本地命令管理，命令不会发送给模型，
+也不会写入会话历史：
+
+```text
+/memory list [user|project]
+/memory add <user|project> "长期信息"
+/memory edit <user|project> <记忆ID> "更新后的信息"
+/memory forget <user|project> <记忆ID>
+```
+
+自动记忆默认关闭。只有显式设置 `memory.auto-extract: true` 后，ImioCode 才会在成功轮次落盘后，
+把经过脱敏的本轮用户文本和最终助手文本再次发送给当前 LLM Provider，提取稳定偏好、项目事实或长期决策。
+Thinking、工具参数、工具输出、旧会话历史和已有记忆不会发送给提取请求。自动候选仍会经过秘密、个人敏感信息、
+临时任务、重复内容和容量限制检查。
+
+CH9 配置示例：
+
+```yaml
+instructions:
+  enabled: true
+  max-include-depth: 8
+  max-expanded-bytes: 131072
+
+sessions:
+  enabled: true
+  retention-days: 0
+  max-sessions: 0
+
+memory:
+  enabled: true
+  auto-extract: false
+  user-scope-enabled: true
+  project-scope-enabled: true
+  max-entries-per-scope: 200
+  max-entry-chars: 1000
+  max-file-bytes: 262144
+  extraction-output-tokens: 1024
+```
+
+`retention-days: 0` 和 `max-sessions: 0` 表示不自动清理。项目会话和项目记忆默认被 Git 忽略；
+`MEWCODE.md` 不会被忽略，可以作为项目协作规范提交到仓库。

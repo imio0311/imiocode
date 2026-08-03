@@ -15,7 +15,10 @@ public record AppConfig(
         ThinkingConfig thinking,
         AgentConfig agent,
         ContextConfig context,
-        UiConfig ui) {
+        UiConfig ui,
+        InstructionsConfig instructions,
+        SessionsConfig sessions,
+        MemoryConfig memory) {
 
     public AppConfig {
         Objects.requireNonNull(provider, "provider");
@@ -28,6 +31,9 @@ public record AppConfig(
         Objects.requireNonNull(agent, "agent");
         Objects.requireNonNull(context, "context");
         Objects.requireNonNull(ui, "ui");
+        Objects.requireNonNull(instructions, "instructions");
+        Objects.requireNonNull(sessions, "sessions");
+        Objects.requireNonNull(memory, "memory");
         if (!baseUri.isAbsolute()) {
             throw new IllegalArgumentException("baseUri 必须是绝对 URI");
         }
@@ -43,6 +49,23 @@ public record AppConfig(
         if (context.windowTokens() <= maxOutputTokens) {
             throw new IllegalArgumentException("context.windowTokens 必须大于 maxOutputTokens");
         }
+    }
+
+    public AppConfig(
+            Provider provider,
+            String model,
+            String apiKey,
+            URI baseUri,
+            Duration connectTimeout,
+            Duration requestTimeout,
+            int maxOutputTokens,
+            ThinkingConfig thinking,
+            AgentConfig agent,
+            ContextConfig context,
+            UiConfig ui) {
+        this(provider, model, apiKey, baseUri, connectTimeout, requestTimeout, maxOutputTokens,
+                thinking, agent, context, ui,
+                InstructionsConfig.defaults(), SessionsConfig.defaults(), MemoryConfig.defaults());
     }
 
     public AppConfig(
@@ -118,6 +141,9 @@ public record AppConfig(
                 + ", thinking=" + thinking
                 + ", agent=" + agent
                 + ", context=" + context
-                + ", ui=" + ui + "]";
+                + ", ui=" + ui
+                + ", instructions=" + instructions
+                + ", sessions=" + sessions
+                + ", memory=" + memory + "]";
     }
 }

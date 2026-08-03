@@ -19,6 +19,9 @@ record ConfigDocument(
         AgentDocument agent,
         ContextDocument context,
         UiDocument ui,
+        InstructionsDocument instructions,
+        SessionsDocument sessions,
+        MemoryDocument memory,
         McpConfigDocument mcp,
         PermissionConfigDocument permissions,
         Map<String, ProviderConfig> providers) {
@@ -34,7 +37,7 @@ record ConfigDocument(
     static ConfigDocument empty() {
         return new ConfigDocument(
                 null, null, null, null, null, null, null, null,
-                null, null, null, Map.of());
+                null, null, null, null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -56,6 +59,9 @@ record ConfigDocument(
                 + ", agent=" + agent
                 + ", context=" + context
                 + ", ui=" + ui
+                + ", instructions=" + instructions
+                + ", sessions=" + sessions
+                + ", memory=" + memory
                 + ", mcp=" + (mcp == null ? "absent" : "configured")
                 + ", permissions=" + (permissions == null ? "absent" : "configured")
                 + ", providers=***]";
@@ -81,5 +87,28 @@ record ConfigDocument(
     }
 
     record UiDocument(String verbosity) {
+    }
+
+    record InstructionsDocument(
+            Boolean enabled,
+            @JsonProperty("max-include-depth") Integer maxIncludeDepth,
+            @JsonProperty("max-expanded-bytes") Long maxExpandedBytes) {
+    }
+
+    record SessionsDocument(
+            Boolean enabled,
+            @JsonProperty("retention-days") Integer retentionDays,
+            @JsonProperty("max-sessions") Integer maxSessions) {
+    }
+
+    record MemoryDocument(
+            Boolean enabled,
+            @JsonProperty("auto-extract") Boolean autoExtract,
+            @JsonProperty("user-scope-enabled") Boolean userScopeEnabled,
+            @JsonProperty("project-scope-enabled") Boolean projectScopeEnabled,
+            @JsonProperty("max-entries-per-scope") Integer maxEntriesPerScope,
+            @JsonProperty("max-entry-chars") Integer maxEntryChars,
+            @JsonProperty("max-file-bytes") Long maxFileBytes,
+            @JsonProperty("extraction-output-tokens") Integer extractionOutputTokens) {
     }
 }
