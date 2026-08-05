@@ -1,8 +1,12 @@
 package io.imiocode.command;
 
-import io.imiocode.terminal.TerminalUi;
 import java.util.Objects;
 
-public record CommandContext(CommandServices services, TerminalUi terminal) {
-    public CommandContext { Objects.requireNonNull(services); Objects.requireNonNull(terminal); }
+/** 命令执行所需的依赖背包，不绑定具体终端。 */
+public record CommandContext(CommandServices services, UIController ui, CommandRegistry commands) {
+    public CommandContext {
+        Objects.requireNonNull(services, "services");
+        Objects.requireNonNull(ui, "ui");
+        Objects.requireNonNull(commands, "commands");
+    }
 }

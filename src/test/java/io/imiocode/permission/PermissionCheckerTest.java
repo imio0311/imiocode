@@ -115,6 +115,24 @@ class PermissionCheckerTest {
         assertEquals(PermissionDecisionSource.MODE, decision.source());
     }
 
+    @Test
+    void sameCheckerUsesLatestRuntimeModeSnapshot() {
+        RuntimePermissionSettings runtime = new RuntimePermissionSettings(new PermissionSettings(
+                PermissionMode.ASK, List.of(), List.of(), List.of()));
+        PermissionChecker checker = new PermissionChecker(
+                workspace,
+                new RegexDangerousCommandDetector(),
+                allowingSandbox(),
+                new PermissionRuleEngine(),
+                new PermissionModePolicy(),
+                runtime,
+                new StrictSafeCommandDetector(workspace));
+
+        assertEquals(PermissionAction.ALLOW, checker.check(command("git status")).action());
+        runtime.switchMode(PermissionMode.READ_ONLY);
+        assertEquals(PermissionAction.DENY, checker.check(command("git status")).action());
+    }
+
     private PermissionChecker checker(PermissionSettings settings) {
         return new PermissionChecker(
                 workspace,

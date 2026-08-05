@@ -5,10 +5,15 @@ import io.imiocode.memory.MemoryDocument;
 import io.imiocode.memory.MemoryScope;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
-public final class MemoryCommand implements LocalCommand {
-    public String name() { return "memory"; }
-    public String usage() { return "/memory list [user|project]|add <scope> <content>|edit <scope> <id> <content>|forget <scope> <id>"; }
+public final class MemoryCommand implements Command {
+    private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
+            "memory", Set.of("mem"),
+            "/memory list [user|project]|add <scope> <content>|edit <scope> <id> <content>|forget <scope> <id>",
+            "查看和管理跨会话记忆", CommandType.LOCAL);
+
+    @Override public CommandDescriptor descriptor() { return DESCRIPTOR; }
 
     public CommandResult execute(CommandContext context, List<String> arguments) {
         if (!context.services().memoryEnabled()) return CommandResult.handled(CommandMessage.error("[记忆] 功能已关闭"));

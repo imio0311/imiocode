@@ -10,6 +10,7 @@ import io.imiocode.prompt.ApiPayload;
 import io.imiocode.tool.ToolDefinition;
 import io.imiocode.tool.ToolResult;
 
+import java.util.List;
 import java.util.Objects;
 
 /** 统一、确定性的近似 Token 估算器。 */
@@ -33,6 +34,17 @@ public final class ApproximateTokenEstimator {
         }
         long inputTokens = (long) Math.ceil(chars / ContextPolicy.CHARACTERS_PER_TOKEN);
         return add(inputTokens, payload.outputTokenLimit().orElse(defaultOutputTokens));
+    }
+
+    /** 只估算会话历史，不组装 Prompt、工具 Schema，也不包含输出预算。 */
+    public long estimateMessages(List<ChatMessage> messages) {
+        Objects.requireNonNull(messages, "messages");
+        long chars = 0;
+        for (ChatMessage message : messages) {
+            chars = add(chars, MESSAGE_OVERHEAD_CHARS + message.role().name().length());
+            for (MessagePart part : message.parts()) chars = add(chars, estimatePartChars(part));
+        }
+        return (long) Math.ceil(chars / ContextPolicy.CHARACTERS_PER_TOKEN);
     }
 
     private static long estimatePartChars(MessagePart part) {

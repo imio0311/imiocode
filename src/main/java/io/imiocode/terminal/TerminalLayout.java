@@ -1,6 +1,7 @@
 package io.imiocode.terminal;
 
 import io.imiocode.config.UiVerbosity;
+import io.imiocode.command.CommandStatus;
 import org.jline.utils.AttributedString;
 
 import java.util.ArrayList;
@@ -110,6 +111,30 @@ public final class TerminalLayout {
         return left + " " + truncate(model, width - leftWidth - 1);
     }
 
+    public String commandStatusLine(
+            CommandStatus status,
+            UiState state,
+            int requestedWidth,
+            TerminalMode mode,
+            UiVerbosity verbosity) {
+        Objects.requireNonNull(status, "status");
+        Objects.requireNonNull(state, "state");
+        Objects.requireNonNull(mode, "mode");
+        Objects.requireNonNull(verbosity, "verbosity");
+        String agentMode = status.agentMode().name().toLowerCase(java.util.Locale.ROOT);
+        String permission = status.permissionMode().name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+        String session = status.session().value();
+        if (session.length() > 8) session = session.substring(0, 8);
+        String tokens = compactNumber(status.estimatedTokens()) + "/" + compactNumber(status.contextWindowTokens());
+        String line = verbosity == UiVerbosity.COMPACT
+                ? agentMode + " · " + permission + " · session " + session + " · " + tokens
+                : "chat · " + state.label() + " · " + agentMode + " · " + permission
+                    + " · session " + session + " · " + tokens + " · MCP "
+                    + status.connectedMcpServers() + "/" + status.registeredMcpTools();
+        if (mode != TerminalMode.PLAIN && verbosity == UiVerbosity.VERBOSE) line = "└─ " + line;
+        return truncate(line, normalizeWidth(requestedWidth));
+    }
+
     public static int columns(String value) {
         return new AttributedString(value == null ? "" : value).columnLength();
     }
@@ -155,5 +180,12 @@ public final class TerminalLayout {
 
     private static int normalizeWidth(int width) {
         return width > 0 ? width : 80;
+    }
+
+    private static String compactNumber(long value) {
+        if (value < 1_000) return Long.toString(value);
+        double scaled = value / 1_000.0;
+        if (scaled >= 100) return Math.round(scaled) + "k";
+        return String.format(java.util.Locale.ROOT, "%.1fk", scaled).replace(".0k", "k");
     }
 }

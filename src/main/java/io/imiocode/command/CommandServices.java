@@ -8,6 +8,7 @@ import io.imiocode.memory.MemoryScope;
 import io.imiocode.session.SessionId;
 import io.imiocode.session.SessionLoadResult;
 import io.imiocode.session.SessionSummary;
+import io.imiocode.permission.PermissionMode;
 import java.util.List;
 import java.util.Optional;
 
@@ -26,4 +27,7 @@ public interface CommandServices {
     MemoryEntry editMemory(MemoryScope scope, String id, String content);
     void forgetMemory(MemoryScope scope, String id);
     boolean memoryEnabled();
+    PermissionMode permissionMode();
+    void switchPermissionMode(PermissionMode mode);
+    CommandStatus status();
 }

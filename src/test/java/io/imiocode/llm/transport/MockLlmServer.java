@@ -57,6 +57,10 @@ public final class MockLlmServer implements AutoCloseable {
         return request;
     }
 
+    public int requestCount() {
+        return requests.size();
+    }
+
     private void handle(HttpExchange exchange) throws IOException {
         byte[] requestBody = exchange.getRequestBody().readAllBytes();
         requests.add(new RecordedRequest(

@@ -19,7 +19,7 @@ public final class PermissionChecker {
     private final PathSandbox sandbox;
     private final PermissionRuleEngine ruleEngine;
     private final PermissionModePolicy modePolicy;
-    private final PermissionSettings settings;
+    private final PermissionSettingsProvider settingsProvider;
     private final SafeCommandDetector safeCommandDetector;
 
     public PermissionChecker(
@@ -36,7 +36,7 @@ public final class PermissionChecker {
                 sandbox,
                 ruleEngine,
                 modePolicy,
-                settings,
+                fixed(settings),
                 command -> SafeCommandResult.uncertain("兼容模式未启用安全命令自动放行"));
     }
 
@@ -49,13 +49,26 @@ public final class PermissionChecker {
             PermissionSettings settings,
             SafeCommandDetector safeCommandDetector
     ) {
+        this(workspace, commandDetector, sandbox, ruleEngine, modePolicy, fixed(settings),
+                safeCommandDetector);
+    }
+
+    public PermissionChecker(
+            Path workspace,
+            DangerousCommandDetector commandDetector,
+            PathSandbox sandbox,
+            PermissionRuleEngine ruleEngine,
+            PermissionModePolicy modePolicy,
+            PermissionSettingsProvider settingsProvider,
+            SafeCommandDetector safeCommandDetector
+    ) {
         this.workspace = Objects.requireNonNull(workspace, "workspace 不能为空")
                 .toAbsolutePath().normalize();
         this.commandDetector = Objects.requireNonNull(commandDetector, "commandDetector 不能为空");
         this.sandbox = Objects.requireNonNull(sandbox, "sandbox 不能为空");
         this.ruleEngine = Objects.requireNonNull(ruleEngine, "ruleEngine 不能为空");
         this.modePolicy = Objects.requireNonNull(modePolicy, "modePolicy 不能为空");
-        this.settings = Objects.requireNonNull(settings, "settings 不能为空");
+        this.settingsProvider = Objects.requireNonNull(settingsProvider, "settingsProvider 不能为空");
         this.safeCommandDetector =
                 Objects.requireNonNull(safeCommandDetector, "safeCommandDetector 不能为空");
     }
@@ -63,6 +76,8 @@ public final class PermissionChecker {
     public PermissionDecision check(PermissionRequest request) {
         try {
             Objects.requireNonNull(request, "request 不能为空");
+            PermissionSettings settings = Objects.requireNonNull(
+                    settingsProvider.snapshot(), "权限设置快照不能为空");
             if (request.operation() == PermissionOperation.COMMAND) {
                 Optional<DangerousCommandMatch> danger =
                         commandDetector.inspect(request.normalizedTarget(), workspace);
@@ -102,5 +117,10 @@ public final class PermissionChecker {
             return PermissionDecision.deny(
                     PermissionDecisionSource.ERROR, "权限检查失败，已安全拒绝");
         }
+    }
+
+    private static PermissionSettingsProvider fixed(PermissionSettings settings) {
+        PermissionSettings checked = Objects.requireNonNull(settings, "settings 不能为空");
+        return () -> checked;
     }
 }

@@ -1,14 +1,18 @@
 package io.imiocode;
 
 import io.imiocode.agent.Agent;
-import io.imiocode.command.LocalCommandRegistry;
+import io.imiocode.command.CommandRegistry;
+import io.imiocode.command.builtin.ClearCommand;
 import io.imiocode.command.builtin.CompactCommand;
 import io.imiocode.command.builtin.DoCommand;
 import io.imiocode.command.builtin.ExitCommand;
 import io.imiocode.command.builtin.HelpCommand;
 import io.imiocode.command.builtin.MemoryCommand;
 import io.imiocode.command.builtin.PlanCommand;
+import io.imiocode.command.builtin.PermissionCommand;
+import io.imiocode.command.builtin.ReviewCommand;
 import io.imiocode.command.builtin.SessionCommand;
+import io.imiocode.command.builtin.StatusCommand;
 import io.imiocode.command.builtin.VerbosityCommand;
 import io.imiocode.config.AppConfig;
 import io.imiocode.config.ConfigException;
@@ -55,6 +59,7 @@ import io.imiocode.permission.PermissionGate;
 import io.imiocode.permission.PermissionModePolicy;
 import io.imiocode.permission.PermissionRequestFactory;
 import io.imiocode.permission.PermissionSettings;
+import io.imiocode.permission.RuntimePermissionSettings;
 import io.imiocode.permission.command.RegexDangerousCommandDetector;
 import io.imiocode.permission.command.StrictSafeCommandDetector;
 import io.imiocode.permission.rule.PermissionRuleEngine;
@@ -108,7 +113,8 @@ public final class ImioCodeApplication {
             AppConfig config = runtimeConfig.app();
             ToolLimits limits = ToolLimits.defaults();
             SecretRedactor redactor = runtimeConfig.redactor();
-            terminal = new JLineTerminalUi(redactor, config.ui().verbosity());
+            CommandRegistry commandRegistry = createCommandRegistry();
+            terminal = new JLineTerminalUi(redactor, config.ui().verbosity(), commandRegistry::complete);
             String version = VersionResolver.resolve();
             terminal.showWelcome(new UiContext(
                     "ImioCode",
@@ -121,6 +127,7 @@ public final class ImioCodeApplication {
             }
             WorkspacePolicy policy = new WorkspacePolicy(workspace);
             PermissionSettings permissionSettings = runtimeConfig.permissions();
+            RuntimePermissionSettings runtimePermissionSettings = new RuntimePermissionSettings(permissionSettings);
             WorkspacePathSandbox sandbox = new WorkspacePathSandbox(policy);
             PermissionChecker permissionChecker = new PermissionChecker(
                     workspace,
@@ -128,7 +135,7 @@ public final class ImioCodeApplication {
                     sandbox,
                     new PermissionRuleEngine(),
                     new PermissionModePolicy(),
-                    permissionSettings,
+                    runtimePermissionSettings,
                     new StrictSafeCommandDetector(workspace));
             PermissionGate permissionGate = new PermissionGate(
                     new PermissionRequestFactory(redactor),
@@ -215,8 +222,15 @@ public final class ImioCodeApplication {
                     new LlmMemoryExtractor(client, config.memory(), new MemoryResponseParser(), redactor),
                     persistentContext,
                     persistenceEvents,
-                    runtimeClock);
-            LocalCommandRegistry commandRegistry = createCommandRegistry();
+                    runtimeClock,
+                    runtimePermissionSettings,
+                    new ApproximateTokenEstimator(),
+                    config.provider().configValue(),
+                    config.model(),
+                    workspace,
+                    config.context().windowTokens(),
+                    mcpStartup.connectedServers(),
+                    mcpStartup.registeredTools());
             String permissionMode = permissionSettings.mode().name()
                     .toLowerCase(java.util.Locale.ROOT);
             if (config.ui().verbosity() == UiVerbosity.COMPACT) {
@@ -261,17 +275,21 @@ public final class ImioCodeApplication {
         return "[MCP" + server + "] " + error.safeMessage();
     }
 
-    private static LocalCommandRegistry createCommandRegistry() {
-        LocalCommandRegistry registry = new LocalCommandRegistry();
+    static CommandRegistry createCommandRegistry() {
+        CommandRegistry registry = new CommandRegistry();
         registry.register(new HelpCommand());
+        registry.register(new CompactCommand());
+        registry.register(new ClearCommand());
         registry.register(new PlanCommand());
         registry.register(new DoCommand());
-        registry.register(new CompactCommand());
-        registry.register(new VerbosityCommand("verbose", UiVerbosity.VERBOSE));
-        registry.register(new VerbosityCommand("compact-ui", UiVerbosity.COMPACT));
         registry.register(new SessionCommand());
         registry.register(new MemoryCommand());
+        registry.register(new PermissionCommand());
+        registry.register(new StatusCommand());
+        registry.register(new ReviewCommand());
         registry.register(new ExitCommand());
+        registry.register(new VerbosityCommand("verbose", UiVerbosity.VERBOSE));
+        registry.register(new VerbosityCommand("compact-ui", UiVerbosity.COMPACT));
         return registry;
     }
 

@@ -61,6 +61,17 @@ class ApproximateTokenEstimatorTest {
         assertEquals(Long.MAX_VALUE, ApproximateTokenEstimator.add(Long.MAX_VALUE - 2, 10));
     }
 
+    @Test
+    void estimatesHistoryOnlyWithoutOutputOrToolBudget() {
+        List<ChatMessage> history = List.of(
+                new ChatMessage(MessageRole.USER, "一段会话历史"),
+                new ChatMessage(MessageRole.ASSISTANT, "回答"));
+
+        assertEquals(0, estimator.estimateMessages(List.of()));
+        assertTrue(estimator.estimateMessages(history) > 0);
+        assertEquals(estimator.estimateMessages(history), estimator.estimateMessages(history));
+    }
+
     private static ApiPayload payload(String system, String message, OptionalInt limit) {
         return new ApiPayload(system, List.of(new ChatMessage(MessageRole.USER, message)),
                 List.of(), CacheIntent.systemOnly(), limit);

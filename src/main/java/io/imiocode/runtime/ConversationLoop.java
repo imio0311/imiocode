@@ -3,8 +3,8 @@ package io.imiocode.runtime;
 import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.AgentStopReason;
 import io.imiocode.command.CommandContext;
-import io.imiocode.command.CommandDisposition;
-import io.imiocode.command.LocalCommandRegistry;
+import io.imiocode.command.CommandOutcome;
+import io.imiocode.command.CommandRegistry;
 import io.imiocode.conversation.ConversationException;
 import io.imiocode.conversation.ConversationListener;
 import io.imiocode.permission.PermissionReply;
@@ -20,10 +20,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class ConversationLoop {
     private final ConversationCoordinator coordinator;
     private final TerminalUi terminal;
-    private final LocalCommandRegistry commands;
+    private final CommandRegistry commands;
     private final AtomicBoolean stopping = new AtomicBoolean();
 
-    public ConversationLoop(ConversationCoordinator coordinator, TerminalUi terminal, LocalCommandRegistry commands) {
+    public ConversationLoop(ConversationCoordinator coordinator, TerminalUi terminal, CommandRegistry commands) {
         this.coordinator = Objects.requireNonNull(coordinator);
         this.terminal = Objects.requireNonNull(terminal);
         this.commands = Objects.requireNonNull(commands);
@@ -31,7 +31,8 @@ public final class ConversationLoop {
 
     public void run() {
         terminal.setInterruptHandler(this::requestStop);
-        CommandContext commandContext = new CommandContext(coordinator, terminal);
+        CommandContext commandContext = new CommandContext(coordinator, terminal, commands);
+        terminal.refreshStatus(coordinator.status());
         while (!stopping.get()) {
             String input = terminal.readLine("You> ");
             if (input == null || stopping.get()) break;
@@ -41,8 +42,14 @@ public final class ConversationLoop {
                 command.orElseThrow().messages().forEach(message -> {
                     if (message.error()) terminal.printError(message.text()); else terminal.printInfo(message.text());
                 });
-                if (command.orElseThrow().disposition() == CommandDisposition.EXIT_REQUESTED) {
+                CommandOutcome outcome = command.orElseThrow().outcome();
+                if (outcome == CommandOutcome.EXIT_REQUESTED) {
                     requestStop(); break;
+                }
+                if (outcome == CommandOutcome.FORWARD_TO_AGENT) {
+                    runAgent(command.orElseThrow().prompt().orElseThrow());
+                } else {
+                    terminal.refreshStatus(coordinator.status());
                 }
                 continue;
             }
@@ -68,6 +75,8 @@ public final class ConversationLoop {
         } catch (RuntimeException exception) {
             terminal.endAssistantResponse(); terminal.updateState(UiState.ERROR);
             terminal.printError("对话处理发生未知错误，本轮响应未完成");
+        } finally {
+            if (!stopping.get()) terminal.refreshStatus(coordinator.status());
         }
     }
 

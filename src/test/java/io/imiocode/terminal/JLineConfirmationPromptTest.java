@@ -1,5 +1,6 @@
 package io.imiocode.terminal;
 
+import io.imiocode.command.ConfirmationPrompt;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 import org.junit.jupiter.api.Test;
@@ -32,7 +33,7 @@ class JLineConfirmationPromptTest {
                 .build();
         JLineTerminalUi ui = new JLineTerminalUi(terminal);
         try {
-            boolean result = ui.confirmAction(new ConfirmationPrompt(
+            boolean result = ui.confirm(new ConfirmationPrompt(
                     "删除会话", "abc123", "删除后无法恢复"));
             String rendered = output.toString(StandardCharsets.UTF_8);
             assertTrue(rendered.contains("删除会话"), rendered);

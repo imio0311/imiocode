@@ -1,6 +1,10 @@
 package io.imiocode.terminal;
 
 import io.imiocode.config.UiVerbosity;
+import io.imiocode.agent.AgentMode;
+import io.imiocode.command.CommandStatus;
+import io.imiocode.permission.PermissionMode;
+import io.imiocode.session.SessionId;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -127,5 +131,28 @@ class TerminalLayoutTest {
         assertTrue(plain.contains(shortContext.workingDirectory().toString()));
         assertTrue(plain.contains("状态: Ready"));
         assertTrue(!plain.contains("\u001B["));
+    }
+
+    @Test
+    void dynamicStatusContainsModesAndFitsNarrowWidths() {
+        CommandStatus status = new CommandStatus(
+                "deepseek", "deepseek-chat", Path.of("work"), AgentMode.PLAN,
+                PermissionMode.READ_ONLY, new SessionId("0123456789abcdef01234567"),
+                8_200, 64_000, 1, 2);
+
+        String verbose = layout.commandStatusLine(
+                status, UiState.TOOL_RUNNING, 120, TerminalMode.FULL, UiVerbosity.VERBOSE);
+        assertTrue(verbose.contains("Tool running"));
+        assertTrue(verbose.contains("plan"));
+        assertTrue(verbose.contains("read-only"));
+        assertTrue(verbose.contains("MCP 1/2"));
+
+        for (int width : List.of(10, 20, 40, 80, 120)) {
+            for (UiVerbosity value : UiVerbosity.values()) {
+                String line = layout.commandStatusLine(
+                        status, UiState.READY, width, TerminalMode.FULL, value);
+                assertTrue(TerminalLayout.columns(line) <= width, line);
+            }
+        }
     }
 }

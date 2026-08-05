@@ -14,8 +14,11 @@ import io.imiocode.mcp.manager.McpLaunchRequest;
 import io.imiocode.context.CompactReport;
 import io.imiocode.context.ContextEvent;
 import io.imiocode.config.UiVerbosity;
+import io.imiocode.command.CommandStatus;
+import io.imiocode.command.ConfirmationPrompt;
+import io.imiocode.command.UIController;
 
-public interface TerminalUi extends AutoCloseable, McpLaunchApprover, McpEventListener {
+public interface TerminalUi extends AutoCloseable, McpLaunchApprover, McpEventListener, UIController {
     void showWelcome(UiContext context);
 
     void updateState(UiState state);
@@ -63,8 +66,17 @@ public interface TerminalUi extends AutoCloseable, McpLaunchApprover, McpEventLi
     }
 
     /** 通用破坏性操作确认，默认拒绝。 */
-    default boolean confirmAction(ConfirmationPrompt prompt) {
+    @Override
+    default boolean confirm(ConfirmationPrompt prompt) {
         return false;
+    }
+
+    @Override
+    default void clearScreen() {
+    }
+
+    @Override
+    default void refreshStatus(CommandStatus status) {
     }
 
     @Override

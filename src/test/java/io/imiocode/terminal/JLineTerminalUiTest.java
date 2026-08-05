@@ -2,6 +2,8 @@ package io.imiocode.terminal;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import io.imiocode.config.UiVerbosity;
+import io.imiocode.command.CommandStatus;
+import io.imiocode.agent.AgentMode;
 import io.imiocode.agent.AgentEvent;
 import io.imiocode.agent.AgentStopReason;
 import io.imiocode.llm.LlmErrorType;
@@ -13,6 +15,8 @@ import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
 import io.imiocode.tool.ToolResult;
 import io.imiocode.llm.TokenUsageBuilder;
+import io.imiocode.permission.PermissionMode;
+import io.imiocode.session.SessionId;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.terminal.Terminal;
@@ -346,5 +350,98 @@ class JLineTerminalUiTest {
         assertTrue(text.contains("blocked"), () -> "实际输出: " + text);
         assertTrue(text.contains("broken"), () -> "实际输出: " + text);
         assertTrue(text.contains("safe failure"), () -> "实际输出: " + text);
+    }
+
+    @Test
+    void compactStatusIsDeduplicatedAndChangesImmediately() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        Terminal terminal = TerminalBuilder.builder()
+                .dumb(true)
+                .type(Terminal.TYPE_DUMB)
+                .streams(new ByteArrayInputStream(new byte[0]), output)
+                .encoding(StandardCharsets.UTF_8)
+                .build();
+        JLineTerminalUi ui = new JLineTerminalUi(terminal, UiVerbosity.COMPACT);
+        CommandStatus ask = status(PermissionMode.ASK);
+
+        ui.refreshStatus(ask);
+        ui.refreshStatus(ask);
+        ui.refreshStatus(status(PermissionMode.FULL_ACCESS));
+        ui.close();
+
+        String text = output.toString(StandardCharsets.UTF_8);
+        assertEquals(1, text.lines().filter(line -> line.contains("do · ask")).count());
+        assertEquals(1, text.lines().filter(line -> line.contains("do · full-access")).count());
+        assertTrue(text.contains("session 01234567"));
+        assertTrue(text.contains("8.2k/64k"));
+    }
+
+    @Test
+    void plainClearDoesNotEmitAnsiAndKeepsStatusVisible() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        Terminal terminal = TerminalBuilder.builder()
+                .dumb(true)
+                .type(Terminal.TYPE_DUMB)
+                .streams(new ByteArrayInputStream(new byte[0]), output)
+                .encoding(StandardCharsets.UTF_8)
+                .build();
+        JLineTerminalUi ui = new JLineTerminalUi(terminal, UiVerbosity.COMPACT);
+        ui.refreshStatus(status(PermissionMode.ASK));
+
+        ui.clearScreen();
+        ui.printInfo("after-clear");
+        ui.close();
+
+        String text = output.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("--- 已清屏 ---"));
+        assertTrue(text.contains("after-clear"));
+        assertTrue(!text.contains("\u001B["));
+        assertEquals(2, text.lines().filter(line -> line.contains("do · ask")).count());
+    }
+
+    @Test
+    void ansiClearUsesTerminalCapabilityAndRedrawsStatus() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        Terminal terminal = TerminalBuilder.builder()
+                .system(false)
+                .type("xterm")
+                .streams(new ByteArrayInputStream(new byte[0]), output)
+                .encoding(StandardCharsets.UTF_8)
+                .build();
+        JLineTerminalUi ui = new JLineTerminalUi(terminal, UiVerbosity.COMPACT);
+        ui.refreshStatus(status(PermissionMode.ASK));
+
+        ui.clearScreen();
+        ui.close();
+
+        String text = output.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("\u001B["), () -> "实际输出: " + text);
+        assertTrue(!text.contains("--- 已清屏 ---"));
+        assertEquals(2, text.lines().filter(line -> line.contains("do · ask")).count());
+    }
+
+    @Test
+    void installedJlineCompleterCompletesSingleCandidate() throws Exception {
+        ByteArrayInputStream input = new ByteArrayInputStream("/perm\t\n".getBytes(StandardCharsets.UTF_8));
+        Terminal terminal = TerminalBuilder.builder()
+                .dumb(true)
+                .type(Terminal.TYPE_DUMB)
+                .streams(input, new ByteArrayOutputStream())
+                .encoding(StandardCharsets.UTF_8)
+                .build();
+        JLineTerminalUi ui = new JLineTerminalUi(
+                terminal,
+                new io.imiocode.tool.SecretRedactor(""),
+                UiVerbosity.COMPACT,
+                prefix -> prefix.equals("perm") ? java.util.List.of("/permission") : java.util.List.of());
+
+        assertEquals("/permission", ui.readLine("> ").trim());
+        ui.close();
+    }
+
+    private static CommandStatus status(PermissionMode permissionMode) {
+        return new CommandStatus(
+                "deepseek", "deepseek-chat", Path.of("."), AgentMode.DO, permissionMode,
+                new SessionId("0123456789abcdef01234567"), 8_200, 64_000, 1, 2);
     }
 }

@@ -200,3 +200,32 @@ memory:
 
 `retention-days: 0` 和 `max-sessions: 0` 表示不自动清理。项目会话和项目记忆默认被 Git 忽略；
 `MEWCODE.md` 不会被忽略，可以作为项目协作规范提交到仓库。
+
+## Slash Command（CH10）
+
+输入以 `/` 开头的内容时，ImioCode 会先在本地命令注册中心解析，不会把未知命令或参数错误写入会话。
+输入 `/help` 可查看当前注册目录；在命令首段按 Tab 可补全主名和别名，参数部分不做补全。
+
+十个核心命令：
+
+```text
+/help
+/compact
+/clear
+/plan
+/do
+/session list|current|new|resume <id>|delete <id>
+/memory list|add|edit|forget ...
+/permission [ask|auto-edit|read-only|full-access|lockdown]
+/status
+/review [关注点]
+```
+
+常用别名包括 `/h`、`/?`、`/cls`、`/sessions`、`/mem`、`/perm`、`/st` 和 `/rv`。
+兼容命令 `/exit`、`/quit`、`/verbose`、`/compact-ui` 继续可用。
+
+- `/clear` 只清空终端显示，不删除当前会话历史。
+- `/permission` 的切换仅对当前进程有效；重启后仍以 `config.yaml` 为准，已有权限规则不会改变。
+- `/status` 只显示 Provider、模型、工作目录、Agent/权限模式、会话、Token 估算和 MCP 计数，不显示密钥。
+- `/review` 会生成只读代码审查 Prompt 并进入一次 Agent Loop；其他普通本地/UI 命令不会调用 Agent。
+- `/compact` 绕过 Agent Loop 和工具，但会在确有可压缩历史时调用一次专用 LLM 摘要请求。

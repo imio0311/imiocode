@@ -13,6 +13,8 @@ import io.imiocode.tool.ToolExecutionState;
 import io.imiocode.context.CompactReport;
 import io.imiocode.context.ContextEvent;
 import io.imiocode.config.UiVerbosity;
+import io.imiocode.command.CommandStatus;
+import io.imiocode.command.ConfirmationPrompt;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -23,6 +25,7 @@ import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 import org.jline.utils.AttributedString;
 import org.jline.utils.AttributedStyle;
+import org.jline.utils.InfoCmp;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -40,10 +43,12 @@ public final class JLineTerminalUi implements TerminalUi {
     private final AtomicReference<Runnable> interruptHandler = new AtomicReference<>(() -> { });
     private final AtomicReference<UiState> state = new AtomicReference<>(UiState.READY);
     private final AtomicReference<UiVerbosity> verbosity;
+    private final AtomicReference<CommandStatus> commandStatus = new AtomicReference<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     private UiContext context;
     private boolean assistantLineOpen;
     private boolean thinkingLineOpen;
+    private CommandStatus lastRenderedStatus;
 
     public JLineTerminalUi() throws IOException {
         this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build(),
@@ -58,6 +63,14 @@ public final class JLineTerminalUi implements TerminalUi {
     public JLineTerminalUi(SecretRedactor redactor, UiVerbosity verbosity) throws IOException {
         this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build(),
                 redactor, verbosity);
+    }
+
+    public JLineTerminalUi(
+            SecretRedactor redactor,
+            UiVerbosity verbosity,
+            SlashCompletionSource completionSource) throws IOException {
+        this(TerminalBuilder.builder().system(true).encoding(java.nio.charset.StandardCharsets.UTF_8).build(),
+                redactor, verbosity, completionSource);
     }
 
     JLineTerminalUi(Terminal terminal) {
@@ -76,7 +89,15 @@ public final class JLineTerminalUi implements TerminalUi {
     }
 
     JLineTerminalUi(Terminal terminal, SecretRedactor redactor, UiVerbosity verbosity) {
-        this(terminal, LineReaderBuilder.builder().terminal(terminal).build(), redactor, verbosity);
+        this(terminal, redactor, verbosity, SlashCompletionSource.empty());
+    }
+
+    JLineTerminalUi(
+            Terminal terminal,
+            SecretRedactor redactor,
+            UiVerbosity verbosity,
+            SlashCompletionSource completionSource) {
+        this(terminal, createLineReader(terminal, completionSource), redactor, verbosity);
     }
 
     JLineTerminalUi(Terminal terminal, LineReader lineReader) {
@@ -128,7 +149,11 @@ public final class JLineTerminalUi implements TerminalUi {
         finishOpenAssistantLine();
         finishOpenThinkingLine();
         TerminalMode mode = currentMode();
-        printStyled(layout.statusLine(context, next, terminalWidth(), mode), stateStyle(next), mode);
+        CommandStatus snapshot = commandStatus.get();
+        String statusLine = snapshot == null
+                ? layout.statusLine(context, next, terminalWidth(), mode)
+                : layout.commandStatusLine(snapshot, next, terminalWidth(), mode, verbosity.get());
+        printStyled(statusLine, stateStyle(next), mode);
         writer.flush();
     }
 
@@ -147,6 +172,7 @@ public final class JLineTerminalUi implements TerminalUi {
         finishOpenAssistantLine();
         finishOpenThinkingLine();
         this.verbosity.set(Objects.requireNonNull(verbosity, "verbosity"));
+        lastRenderedStatus = null;
     }
 
     @Override
@@ -193,8 +219,11 @@ public final class JLineTerminalUi implements TerminalUi {
             return null;
         } finally {
             if (context != null && !closed.get() && displayPolicy().showStateTransitions()) {
-                String status = layout.statusLine(
-                        context, state.get(), terminalWidth(), mode, verbosity.get());
+                CommandStatus snapshot = commandStatus.get();
+                String status = snapshot == null
+                        ? layout.statusLine(context, state.get(), terminalWidth(), mode, verbosity.get())
+                        : layout.commandStatusLine(
+                                snapshot, state.get(), terminalWidth(), mode, verbosity.get());
                 if (!status.isEmpty()) {
                     printStyled(status, stateStyle(state.get()), mode);
                 }
@@ -384,7 +413,7 @@ public final class JLineTerminalUi implements TerminalUi {
     }
 
     @Override
-    public synchronized boolean confirmAction(ConfirmationPrompt prompt) {
+    public synchronized boolean confirm(ConfirmationPrompt prompt) {
         Objects.requireNonNull(prompt, "prompt 不能为空");
         if (closed.get()) return false;
         finishOpenAssistantLine();
@@ -403,6 +432,28 @@ public final class JLineTerminalUi implements TerminalUi {
         } catch (UserInterruptException | EndOfFileException exception) {
             return false;
         }
+    }
+
+    @Override
+    public synchronized void clearScreen() {
+        if (closed.get()) return;
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        if (supportsAnsi()) {
+            terminal.puts(InfoCmp.Capability.clear_screen);
+        } else {
+            writer.println();
+            writer.println("--- 已清屏 ---");
+        }
+        lastRenderedStatus = null;
+        renderCommandStatus(true);
+        writer.flush();
+    }
+
+    @Override
+    public synchronized void refreshStatus(CommandStatus status) {
+        commandStatus.set(Objects.requireNonNull(status, "status"));
+        renderCommandStatus(false);
     }
 
     @Override
@@ -618,14 +669,40 @@ public final class JLineTerminalUi implements TerminalUi {
             return true;
         });
         Reference insertNewline = new Reference("insert-newline");
-        lineReader.getKeyMaps().values().forEach(keyMap -> keyMap.bind(
-                insertNewline,
-                KeyMap.alt('\r'),
-                KeyMap.alt('\n')));
+        Reference completeWord = new Reference(LineReader.COMPLETE_WORD);
+        lineReader.getKeyMaps().values().forEach(keyMap -> {
+            keyMap.bind(insertNewline, KeyMap.alt('\r'), KeyMap.alt('\n'));
+            keyMap.bind(completeWord, "\t");
+        });
     }
 
     private TerminalMode currentMode() {
         return TerminalMode.select(terminalWidth(), supportsAnsi());
+    }
+
+    private static LineReader createLineReader(Terminal terminal, SlashCompletionSource source) {
+        LineReader reader = LineReaderBuilder.builder()
+                .terminal(terminal)
+                .completer(new SlashCommandCompleter(Objects.requireNonNull(source, "source")))
+                .build();
+        reader.option(LineReader.Option.AUTO_LIST, true);
+        reader.option(LineReader.Option.AUTO_MENU, true);
+        return reader;
+    }
+
+    private void renderCommandStatus(boolean force) {
+        if (closed.get()) return;
+        CommandStatus snapshot = commandStatus.get();
+        if (snapshot == null || (!force && snapshot.equals(lastRenderedStatus))) return;
+        finishOpenAssistantLine();
+        finishOpenThinkingLine();
+        String line = layout.commandStatusLine(
+                snapshot, state.get(), terminalWidth(), currentMode(), verbosity.get());
+        if (!line.isEmpty()) {
+            printStyled(line, AttributedStyle.DEFAULT.foreground(AttributedStyle.CYAN), currentMode());
+        }
+        lastRenderedStatus = snapshot;
+        writer.flush();
     }
 
     private UiDisplayPolicy displayPolicy() {

@@ -3,9 +3,11 @@ package io.imiocode.runtime;
 import io.imiocode.agent.AgentMode;
 import io.imiocode.agent.AgentEvent;
 import io.imiocode.command.CommandServices;
+import io.imiocode.command.CommandStatus;
 import io.imiocode.config.MemoryConfig;
 import io.imiocode.config.SessionsConfig;
 import io.imiocode.context.CompactReport;
+import io.imiocode.context.ApproximateTokenEstimator;
 import io.imiocode.conversation.ChatMessage;
 import io.imiocode.conversation.ChatResponse;
 import io.imiocode.conversation.ConversationException;
@@ -20,6 +22,8 @@ import io.imiocode.persistence.PersistenceEvent;
 import io.imiocode.persistence.PersistenceEventListener;
 import io.imiocode.persistence.PersistentContextProvider;
 import io.imiocode.permission.PermissionReply;
+import io.imiocode.permission.PermissionMode;
+import io.imiocode.permission.RuntimePermissionSettings;
 import io.imiocode.session.SessionId;
 import io.imiocode.session.SessionLoadResult;
 import io.imiocode.session.SessionManager;
@@ -28,6 +32,7 @@ import io.imiocode.session.SessionSnapshot;
 import io.imiocode.session.SessionSummary;
 
 import java.time.Clock;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 
@@ -42,6 +47,14 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     private final PersistentContextProvider context;
     private final PersistenceEventListener events;
     private final Clock clock;
+    private final RuntimePermissionSettings permissionSettings;
+    private final ApproximateTokenEstimator tokenEstimator;
+    private final String provider;
+    private final String model;
+    private final Path workspace;
+    private final long contextWindowTokens;
+    private final int connectedMcpServers;
+    private final int registeredMcpTools;
     private SessionSnapshot current;
 
     public ConversationCoordinator(
@@ -53,11 +66,29 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
             MemoryExtractor extractor,
             PersistentContextProvider context,
             PersistenceEventListener events,
-            Clock clock) {
+            Clock clock,
+            RuntimePermissionSettings permissionSettings,
+            ApproximateTokenEstimator tokenEstimator,
+            String provider,
+            String model,
+            Path workspace,
+            long contextWindowTokens,
+            int connectedMcpServers,
+            int registeredMcpTools) {
         this.core = core; this.sessions = sessions; this.sessionsConfig = sessionsConfig;
         this.memories = memories; this.memoryConfig = memoryConfig; this.extractor = extractor;
         this.context = context; this.events = events == null ? PersistenceEventListener.noop() : events;
         this.clock = clock;
+        this.permissionSettings = java.util.Objects.requireNonNull(permissionSettings, "permissionSettings");
+        this.tokenEstimator = java.util.Objects.requireNonNull(tokenEstimator, "tokenEstimator");
+        this.provider = requireText(provider, "provider");
+        this.model = requireText(model, "model");
+        this.workspace = java.util.Objects.requireNonNull(workspace, "workspace").toAbsolutePath().normalize();
+        if (contextWindowTokens <= 0) throw new IllegalArgumentException("contextWindowTokens 必须为正数");
+        if (connectedMcpServers < 0 || registeredMcpTools < 0) throw new IllegalArgumentException("MCP 计数不能为负数");
+        this.contextWindowTokens = contextWindowTokens;
+        this.connectedMcpServers = connectedMcpServers;
+        this.registeredMcpTools = registeredMcpTools;
         this.current = sessionsConfig.enabled() ? sessions.createNew() : ephemeral(List.of());
         if (sessionsConfig.enabled()) sessions.applyRetention(current.metadata().id());
     }
@@ -103,11 +134,13 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
 
     @Override
     public void switchMode(AgentMode mode) {
+        requireIdle();
         core.switchMode(mode, noopConversationListener());
     }
 
     @Override
     public CompactReport compact() {
+        requireIdle();
         List<ChatMessage> before = core.historySnapshot();
         CompactReport report = core.forceCompact(noopConversationListener());
         if (report.compacted()) {
@@ -158,6 +191,30 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     @Override public void forgetMemory(MemoryScope scope, String id) { memories.forget(scope, id); context.reloadMemories(); }
     @Override public boolean memoryEnabled() { return memories.enabled(); }
 
+    @Override public PermissionMode permissionMode() { return permissionSettings.mode(); }
+
+    @Override
+    public void switchPermissionMode(PermissionMode mode) {
+        requireIdle();
+        permissionSettings.switchMode(mode);
+    }
+
+    @Override
+    public CommandStatus status() {
+        List<ChatMessage> history = core.historySnapshot();
+        return new CommandStatus(
+                provider,
+                model,
+                workspace,
+                core.mode(),
+                permissionSettings.mode(),
+                current.metadata().id(),
+                tokenEstimator.estimateMessages(history),
+                contextWindowTokens,
+                connectedMcpServers,
+                registeredMcpTools);
+    }
+
     public boolean respondPermission(String requestId, PermissionReply reply) { return core.respondPermission(requestId, reply); }
     public void cancelActive() { core.cancelActive(); }
     public boolean isActive() { return core.isActive(); }
@@ -184,5 +241,10 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
             @Override public void onTextDelta(String text) { }
             @Override public void onAgentEvent(AgentEvent event) { }
         };
+    }
+
+    private static String requireText(String value, String label) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(label + " 不能为空");
+        return value.trim();
     }
 }

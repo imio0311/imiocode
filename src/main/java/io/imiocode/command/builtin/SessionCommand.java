@@ -3,12 +3,16 @@ package io.imiocode.command.builtin;
 import io.imiocode.command.*;
 import io.imiocode.session.SessionId;
 import io.imiocode.session.SessionSummary;
-import io.imiocode.terminal.ConfirmationPrompt;
 import java.util.List;
+import java.util.Set;
 
-public final class SessionCommand implements LocalCommand {
-    public String name() { return "session"; }
-    public String usage() { return "/session list|current|new|resume <id>|delete <id>"; }
+public final class SessionCommand implements Command {
+    private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
+            "session", Set.of("sessions"),
+            "/session list|current|new|resume <id>|delete <id>",
+            "查看、创建、恢复或删除会话", CommandType.LOCAL);
+
+    @Override public CommandDescriptor descriptor() { return DESCRIPTOR; }
 
     public CommandResult execute(CommandContext context, List<String> arguments) {
         if (!context.services().sessionsEnabled()) return CommandResult.handled(CommandMessage.error("[会话] 持久化功能已关闭"));
@@ -46,7 +50,7 @@ public final class SessionCommand implements LocalCommand {
     private CommandResult delete(CommandContext context, List<String> args) {
         requireSize(args, 2); SessionId id = new SessionId(args.get(1));
         if (id.equals(context.services().currentSession().id())) throw new IllegalArgumentException("不能删除当前会话，请先新建或恢复其他会话");
-        boolean confirmed = context.terminal().confirmAction(new ConfirmationPrompt(
+        boolean confirmed = context.ui().confirm(new ConfirmationPrompt(
                 "删除会话", id.value(), "删除后无法从 ImioCode 恢复"));
         if (!confirmed) return CommandResult.handled(CommandMessage.info("[会话] 已取消删除"));
         context.services().deleteSession(id);
