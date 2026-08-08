@@ -12,6 +12,7 @@ import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
 import io.imiocode.llm.StreamListener;
 import io.imiocode.permission.PermissionReply;
+import io.imiocode.skill.SkillInvocation;
 import io.imiocode.tool.ToolExecutor;
 import io.imiocode.tool.ToolRegistry;
 
@@ -19,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Optional;
 
 /**
  * 会话历史的事务边界：只有 Agent 正常完成时才提交完整临时轨迹。
@@ -62,6 +64,22 @@ public final class ConversationSession implements AutoCloseable {
             String userInput,
             ConversationListener listener
     ) throws ConversationException {
+        return sendWithEvents(userInput, Optional.empty(), listener);
+    }
+
+    public synchronized ChatResponse sendSkillWithEvents(
+            String userInput,
+            SkillInvocation invocation,
+            ConversationListener listener
+    ) throws ConversationException {
+        return sendWithEvents(userInput, Optional.of(Objects.requireNonNull(invocation)), listener);
+    }
+
+    private ChatResponse sendWithEvents(
+            String userInput,
+            Optional<SkillInvocation> invocation,
+            ConversationListener listener
+    ) throws ConversationException {
         Objects.requireNonNull(listener, "listener");
         if (closed.get()) {
             throw new ConversationException("会话已关闭", false, true, false);
@@ -82,7 +100,7 @@ public final class ConversationSession implements AutoCloseable {
             }
 
             AgentResult result = agent.run(
-                    new AgentRequest(committed, userMessage, reminders),
+                    new AgentRequest(committed, userMessage, reminders, invocation),
                     listener::onAgentEvent
             );
             applyResultHistory(result);
@@ -96,6 +114,19 @@ public final class ConversationSession implements AutoCloseable {
         } finally {
             active.set(false);
         }
+    }
+
+    /** fork 子 Agent 完成后，只把调用请求和最终回复写入父会话。 */
+    public synchronized ChatResponse appendForkResult(String userInput, String responseText) {
+        if (closed.get()) throw new IllegalStateException("会话已关闭");
+        if (active.get()) throw new IllegalStateException("会话正在执行任务");
+        ChatMessage user = new ChatMessage(MessageRole.USER, userInput);
+        ChatResponse response = new ChatResponse(responseText);
+        synchronized (history) {
+            history.add(user);
+            history.add(response.message());
+        }
+        return response;
     }
 
     private void applyResultHistory(AgentResult result) {

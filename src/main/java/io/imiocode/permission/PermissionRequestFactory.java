@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolDefinition;
+import io.imiocode.tool.Tool;
 
 import java.util.Locale;
 import java.util.Map;
@@ -19,6 +20,7 @@ public final class PermissionRequestFactory {
             "grep", PermissionOperation.READ,
             "write_file", PermissionOperation.WRITE,
             "edit_file", PermissionOperation.WRITE,
+            "load_skill", PermissionOperation.READ,
             "bash", PermissionOperation.COMMAND);
 
     private final SecretRedactor redactor;
@@ -42,6 +44,7 @@ public final class PermissionRequestFactory {
             case "bash" -> requireText(arguments, "command");
             case "glob" -> requireText(arguments, "pattern");
             case "grep" -> optionalText(arguments, "path", ".");
+            case "load_skill" -> ".";
             default -> requireText(arguments, "path");
         };
         String normalized = operation == PermissionOperation.COMMAND
@@ -50,6 +53,23 @@ public final class PermissionRequestFactory {
         String display = truncate(redactor.redact(normalized));
         return new PermissionRequest(
                 call, definition.risk(), operation, normalized, display);
+    }
+
+    /** 动态工具可提供渲染后的真实目标，确保仍经过危险命令与规则检查。 */
+    public PermissionRequest create(ToolCall call, Tool tool) {
+        Objects.requireNonNull(tool, "tool 不能为空");
+        if (!(tool instanceof PermissionTargetProvider provider)) {
+            return create(call, tool.definition());
+        }
+        String rawTarget = provider.permissionTarget(call.arguments());
+        String normalized = provider.permissionOperation() == PermissionOperation.COMMAND
+                ? normalizeCommand(rawTarget) : normalizePath(rawTarget);
+        return new PermissionRequest(
+                call,
+                tool.definition().risk(),
+                provider.permissionOperation(),
+                normalized,
+                truncate(redactor.redact(normalized)));
     }
 
     private static String requireText(ObjectNode arguments, String field) {

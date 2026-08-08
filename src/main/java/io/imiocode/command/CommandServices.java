@@ -9,6 +9,7 @@ import io.imiocode.session.SessionId;
 import io.imiocode.session.SessionLoadResult;
 import io.imiocode.session.SessionSummary;
 import io.imiocode.permission.PermissionMode;
+import io.imiocode.skill.SkillCatalogSnapshot;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,4 +31,16 @@ public interface CommandServices {
     PermissionMode permissionMode();
     void switchPermissionMode(PermissionMode mode);
     CommandStatus status();
+
+    default String prepareSkillInvocation(String name, String arguments) {
+        throw new IllegalStateException("Skill 功能尚未初始化");
+    }
+
+    default SkillCatalogSnapshot skillCatalog() {
+        return SkillCatalogSnapshot.empty();
+    }
+
+    default SkillCatalogSnapshot reloadSkills() {
+        throw new IllegalStateException("Skill 功能尚未初始化");
+    }
 }

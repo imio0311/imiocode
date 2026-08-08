@@ -25,6 +25,18 @@ public final class ToolRegistry {
         enabled.add(name);
     }
 
+    /** 仅用于任务级动态工具；名称冲突时拒绝，避免覆盖已有能力。 */
+    public synchronized void registerTemporary(Tool tool) {
+        register(tool);
+    }
+
+    /** 移除任务级动态工具；静态工具调用方不应使用此方法。 */
+    public synchronized Optional<Tool> unregister(String name) {
+        if (name == null) return Optional.empty();
+        enabled.remove(name);
+        return Optional.ofNullable(tools.remove(name));
+    }
+
     public synchronized void enable(String name) {
         requireRegistered(name);
         enabled.add(name);
@@ -66,6 +78,14 @@ public final class ToolRegistry {
 
     public synchronized Set<String> enabledNames() {
         return Set.copyOf(enabled);
+    }
+
+    public synchronized Set<String> registeredNames() {
+        return Set.copyOf(tools.keySet());
+    }
+
+    public synchronized boolean isEnabled(String name) {
+        return name != null && enabled.contains(name);
     }
 
     public synchronized List<ToolDefinition> enabledDefinitions() {

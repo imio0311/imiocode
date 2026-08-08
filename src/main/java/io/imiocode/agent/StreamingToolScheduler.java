@@ -151,6 +151,11 @@ public final class StreamingToolScheduler implements AutoCloseable {
                 continue;
             }
             Tool tool = resolution.tool().orElseThrow();
+            if ("load_skill".equals(call.name())) {
+                // fork Skill 可能发起新的模型请求，必须等当前模型流完整结束。
+                eagerBarrier = true;
+                return;
+            }
             PermissionEvaluation evaluation = permissionEvaluation(nextEager, call, tool);
             if (evaluation != null
                     && evaluation.decision().action() == PermissionAction.DENY) {
@@ -392,7 +397,7 @@ public final class StreamingToolScheduler implements AutoCloseable {
         }
         return permissionEvaluations.computeIfAbsent(
                 index,
-                ignored -> permissionGate.evaluate(call, tool.definition()));
+                ignored -> permissionGate.evaluate(call, tool));
     }
 
     private PermissionDecision resolvePermission(int index, ToolCall call, Tool tool) {

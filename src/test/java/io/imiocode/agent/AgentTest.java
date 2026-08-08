@@ -23,6 +23,10 @@ import io.imiocode.tool.ToolDefinition;
 import io.imiocode.tool.ToolRegistry;
 import io.imiocode.tool.ToolResult;
 import io.imiocode.tool.ToolRisk;
+import io.imiocode.skill.LoadSkillTool;
+import io.imiocode.skill.SkillActivator;
+import io.imiocode.skill.SkillExecutor;
+import io.imiocode.skill.SkillLoader;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -36,11 +40,52 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTest {
     @Test
-    void capturesEnvironmentOncePerTaskAndReusesReminderAcrossIterations() {
+    void loadSkillActivatesFullSopAndWhitelistForFollowingIteration() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(tool("read_file", ToolRisk.LOW, new AtomicInteger()));
+        registry.register(tool("glob", ToolRisk.LOW, new AtomicInteger()));
+        registry.register(tool("grep", ToolRisk.LOW, new AtomicInteger()));
+        registry.register(tool("bash", ToolRisk.HIGH, new AtomicInteger()));
+        registry.register(tool("write_file", ToolRisk.MEDIUM, new AtomicInteger()));
+        SkillLoader loader = new SkillLoader(
+                Path.of("target/test-skill-project"), Path.of("target/test-skill-user"));
+        SkillActivator activator = new SkillActivator(registry, ignored -> {
+            throw new AssertionError("此测试不应创建专属工具");
+        });
+        SkillExecutor executor = new SkillExecutor(loader, activator);
+        registry.register(new LoadSkillTool(executor));
+        ObjectNode arguments = JsonNodeFactory.instance.objectNode();
+        arguments.put("name", "commit");
+        arguments.put("arguments", "测试参数");
+        SequencedClient client = new SequencedClient(List.of(
+                toolResponse(new ToolCall("skill-1", "load_skill", arguments)),
+                new ChatResponse("完成")));
+
+        try (Agent agent = new Agent(
+                client, registry, config(3), 8_192,
+                () -> environment(1), new EnvironmentReminderFormatter(),
+                null, null, activator)) {
+            AgentResult result = agent.run(request("帮我提交"), AgentEventListener.NOOP);
+            assertTrue(result.completed());
+        }
+
+        assertTrue(client.requests.getFirst().toolSelection().unrestricted());
+        assertTrue(client.requests.get(1).toolSelection().allows("load_skill"));
+        assertTrue(client.requests.get(1).toolSelection().allows("bash"));
+        assertFalse(client.requests.get(1).toolSelection().allows("write_file"));
+        assertTrue(client.requests.get(1).reminders().stream()
+                .anyMatch(reminder -> reminder.content().contains("Commit 工作流")
+                        && reminder.content().contains("测试参数")));
+        assertTrue(activator.activeSkillNames().isEmpty());
+    }
+
+    @Test
+    void rebuildsEnvironmentReminderForEveryIteration() {
         AtomicInteger captures = new AtomicInteger();
         ToolRegistry registry = new ToolRegistry();
         registry.register(tool("read_file", ToolRisk.LOW, new AtomicInteger()));
@@ -59,11 +104,11 @@ class AgentTest {
             result = agent.run(request("读取"), AgentEventListener.NOOP);
         }
 
-        assertEquals(1, captures.get());
+        assertEquals(2, captures.get());
         assertEquals(2, client.requests.size());
         String first = environmentReminder(client.requests.get(0));
         String second = environmentReminder(client.requests.get(1));
-        assertEquals(first, second);
+        assertNotEquals(first, second);
         assertTrue(first.contains("当前模型：model-sentinel"));
         assertFalse(result.trajectory().stream()
                 .map(ChatMessage::content)

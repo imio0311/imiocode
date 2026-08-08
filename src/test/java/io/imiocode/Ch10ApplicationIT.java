@@ -55,7 +55,7 @@ class Ch10ApplicationIT {
     }
 
     @Test
-    void reviewForwardsGeneratedPromptExactlyOnce() throws Exception {
+    void reviewSkillRunsInForkAndReturnsExactlyOnce() throws Exception {
         try (MockLlmServer server = new MockLlmServer()) {
             Path workspace = workspace(server, "review");
             server.enqueueSse(answer("审查完成-MARKER"));
@@ -66,14 +66,14 @@ class Ch10ApplicationIT {
             assertTrue(output.contains("审查完成-MARKER"), output);
             assertEquals(1, server.requestCount());
             String request = server.takeRequest().body();
-            assertTrue(request.contains("只做审查，不要修改文件"), request);
-            assertTrue(request.contains("Additional focus"), request);
+            assertTrue(request.contains("只做审查，不修改文件"), request);
+            assertTrue(request.contains("Review 工作流"), request);
             assertTrue(request.contains("重点关注并发安全"), request);
-            assertFalse(request.contains("/review"), request);
+            assertTrue(request.contains("/review"), request);
             Path archive = firstSessionArchive(workspace);
             String jsonl = Files.readString(archive, StandardCharsets.UTF_8);
-            assertTrue(jsonl.contains("Additional focus"), jsonl);
-            assertFalse(jsonl.contains("/review"), jsonl);
+            assertTrue(jsonl.contains("/review 重点关注并发安全"), jsonl);
+            assertFalse(jsonl.contains("Review 工作流"), jsonl);
         }
     }
 

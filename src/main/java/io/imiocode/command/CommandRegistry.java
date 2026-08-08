@@ -17,6 +17,7 @@ public final class CommandRegistry {
     private final Map<String, Command> names = new LinkedHashMap<>();
     private final Map<String, Command> aliases = new LinkedHashMap<>();
     private final Set<Command> commands = new LinkedHashSet<>();
+    private final Set<Command> dynamicCommands = new LinkedHashSet<>();
 
     public CommandRegistry() {
         this(new CommandParser());
@@ -40,6 +41,39 @@ public final class CommandRegistry {
         names.put(descriptor.name(), command);
         descriptor.aliases().forEach(alias -> aliases.put(alias, command));
         commands.add(command);
+    }
+
+    /** 原子替换全部动态命令；静态内置命令始终保留且优先占用名称。 */
+    public synchronized void replaceDynamic(List<? extends Command> replacements) {
+        List<Command> staticCommands = commands.stream()
+                .filter(command -> !dynamicCommands.contains(command)).toList();
+        LinkedHashMap<String, Command> nextNames = new LinkedHashMap<>();
+        LinkedHashMap<String, Command> nextAliases = new LinkedHashMap<>();
+        LinkedHashSet<Command> nextCommands = new LinkedHashSet<>();
+        for (Command command : staticCommands) {
+            addTo(command, nextNames, nextAliases, nextCommands);
+        }
+        LinkedHashSet<Command> nextDynamic = new LinkedHashSet<>();
+        List<? extends Command> checkedReplacements = replacements == null ? List.of() : replacements;
+        for (Command command : checkedReplacements) {
+            addTo(command, nextNames, nextAliases, nextCommands);
+            nextDynamic.add(command);
+        }
+        names.clear(); names.putAll(nextNames);
+        aliases.clear(); aliases.putAll(nextAliases);
+        commands.clear(); commands.addAll(nextCommands);
+        dynamicCommands.clear(); dynamicCommands.addAll(nextDynamic);
+    }
+
+    /** 应用装配阶段用于把兼容命令迁移为动态实现。 */
+    public synchronized void unregister(String name) {
+        Command command = find(name).orElse(null);
+        if (command == null) return;
+        CommandDescriptor descriptor = command.descriptor();
+        names.remove(descriptor.name());
+        descriptor.aliases().forEach(aliases::remove);
+        commands.remove(command);
+        dynamicCommands.remove(command);
     }
 
     public synchronized Optional<Command> find(String name) {
@@ -97,5 +131,22 @@ public final class CommandRegistry {
         if (value == null) return "";
         String normalized = value.trim().toLowerCase(Locale.ROOT);
         return normalized.startsWith("/") ? normalized.substring(1) : normalized;
+    }
+
+    private static void addTo(Command command, Map<String, Command> targetNames,
+                              Map<String, Command> targetAliases, Set<Command> targetCommands) {
+        Objects.requireNonNull(command, "command");
+        CommandDescriptor descriptor = Objects.requireNonNull(command.descriptor(), "descriptor");
+        if (targetNames.containsKey(descriptor.name()) || targetAliases.containsKey(descriptor.name())) {
+            throw new IllegalArgumentException("命令名或别名冲突: " + descriptor.name());
+        }
+        targetNames.put(descriptor.name(), command);
+        for (String alias : descriptor.aliases()) {
+            if (targetNames.containsKey(alias) || targetAliases.containsKey(alias)) {
+                throw new IllegalArgumentException("命令名或别名冲突: " + alias);
+            }
+            targetAliases.put(alias, command);
+        }
+        targetCommands.add(command);
     }
 }

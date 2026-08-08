@@ -2,6 +2,7 @@ package io.imiocode.permission;
 
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolDefinition;
+import io.imiocode.tool.Tool;
 
 import java.util.Objects;
 import java.util.function.BiConsumer;
@@ -39,6 +40,25 @@ public final class PermissionGate implements AutoCloseable {
                     PermissionDecision.deny(
                             PermissionDecisionSource.ERROR,
                             "工具参数无法完成权限验证，已安全拒绝"));
+        }
+    }
+
+    public PermissionEvaluation evaluate(ToolCall call, Tool tool) {
+        Objects.requireNonNull(tool, "tool 不能为空");
+        try {
+            PermissionRequest request = requestFactory.create(call, tool);
+            if ("load_skill".equals(call.name())) {
+                return new PermissionEvaluation(request, PermissionDecision.allow(
+                        PermissionDecisionSource.MODE,
+                        "系统 Skill 加载工具不产生直接文件或命令副作用"));
+            }
+            return new PermissionEvaluation(request, checker.check(request));
+        } catch (RuntimeException exception) {
+            ToolDefinition definition = tool.definition();
+            PermissionRequest fallback = new PermissionRequest(
+                    call, definition.risk(), operationFor(call.name()), "<invalid>", "<invalid>");
+            return new PermissionEvaluation(fallback, PermissionDecision.deny(
+                    PermissionDecisionSource.ERROR, "工具参数无法完成权限验证，已安全拒绝"));
         }
     }
 

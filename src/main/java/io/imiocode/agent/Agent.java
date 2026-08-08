@@ -21,6 +21,8 @@ import io.imiocode.prompt.EnvironmentContextProvider;
 import io.imiocode.prompt.EnvironmentReminderFormatter;
 import io.imiocode.permission.PermissionGate;
 import io.imiocode.permission.PermissionReply;
+import io.imiocode.skill.SkillActivator;
+import io.imiocode.skill.SkillRunScope;
 import io.imiocode.tool.ToolExecution;
 import io.imiocode.tool.ToolRegistry;
 import io.imiocode.tool.ToolSelection;
@@ -53,6 +55,8 @@ public final class Agent implements AutoCloseable {
     private final EnvironmentReminderFormatter environmentReminderFormatter;
     private final PermissionGate permissionGate;
     private final ContextManager contextManager;
+    private final SkillActivator skillActivator;
+    private final boolean closeSharedResources;
     private final AtomicReference<ModeState> modeState =
             new AtomicReference<>(new ModeState(AgentMode.DO, false));
     private final AtomicReference<AgentTaskContext> activeTask = new AtomicReference<>();
@@ -127,6 +131,37 @@ public final class Agent implements AutoCloseable {
             PermissionGate permissionGate,
             ContextManager contextManager
     ) {
+        this(client, registry, config, initialOutputTokenLimit, environmentContextProvider,
+                environmentReminderFormatter, permissionGate, contextManager, null);
+    }
+
+    public Agent(
+            LlmClient client,
+            ToolRegistry registry,
+            AgentConfig config,
+            int initialOutputTokenLimit,
+            EnvironmentContextProvider environmentContextProvider,
+            EnvironmentReminderFormatter environmentReminderFormatter,
+            PermissionGate permissionGate,
+            ContextManager contextManager,
+            SkillActivator skillActivator
+    ) {
+        this(client, registry, config, initialOutputTokenLimit, environmentContextProvider,
+                environmentReminderFormatter, permissionGate, contextManager, skillActivator, true);
+    }
+
+    public Agent(
+            LlmClient client,
+            ToolRegistry registry,
+            AgentConfig config,
+            int initialOutputTokenLimit,
+            EnvironmentContextProvider environmentContextProvider,
+            EnvironmentReminderFormatter environmentReminderFormatter,
+            PermissionGate permissionGate,
+            ContextManager contextManager,
+            SkillActivator skillActivator,
+            boolean closeSharedResources
+    ) {
         this.client = Objects.requireNonNull(client, "client 不能为空");
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
         this.config = Objects.requireNonNull(config, "config 不能为空");
@@ -138,6 +173,8 @@ public final class Agent implements AutoCloseable {
                 "环境提醒格式化器不能为空");
         this.permissionGate = permissionGate;
         this.contextManager = contextManager;
+        this.skillActivator = skillActivator;
+        this.closeSharedResources = closeSharedResources;
         if (initialOutputTokenLimit <= 0) {
             throw new IllegalArgumentException("initialOutputTokenLimit 必须为正数");
         }
@@ -184,12 +221,23 @@ public final class Agent implements AutoCloseable {
 
         TaskModeSnapshot taskModeSnapshot = consumeTaskModeSnapshot();
         AgentMode taskMode = taskModeSnapshot.mode();
-        ToolSelection selection = PlanModePrompt.toolSelection(taskMode);
-        SystemReminder environmentReminder = environmentReminderFormatter.format(
-                environmentContextProvider.capture());
+        ToolSelection baseSelection = PlanModePrompt.toolSelection(taskMode);
         List<SystemReminder> sessionReminders = List.copyOf(request.reminders());
         ManagedConversationState conversation = new ManagedConversationState(
                 request.committedHistory(), request.userMessage());
+        List<ChatMessage> skillSourceHistory = new ArrayList<>(request.committedHistory());
+        request.reminders().forEach(reminder -> skillSourceHistory.add(new ChatMessage(
+                MessageRole.USER, reminder.wrappedContent())));
+        skillSourceHistory.add(request.userMessage());
+        SkillRunScope skillScope;
+        try {
+            skillScope = skillActivator == null
+                    ? SkillRunScope.NOOP
+                    : skillActivator.beginRun(request.skillInvocation(), skillSourceHistory, checkedListener);
+        } catch (RuntimeException exception) {
+            activeTask.compareAndSet(context, null);
+            throw exception;
+        }
         AutoCompactTrackingState compactTracking = new AutoCompactTrackingState();
         int iterations = 0;
         UnknownToolCircuitBreaker unknownTools = new UnknownToolCircuitBreaker();
@@ -216,12 +264,22 @@ public final class Agent implements AutoCloseable {
                 }
 
                 checkedListener.onEvent(new AgentEvent.IterationStarted(iteration));
+                ToolSelection selection = skillActivator == null
+                        ? baseSelection : skillActivator.selectTools(baseSelection);
+                SystemReminder environmentReminder = environmentReminderFormatter.format(
+                        environmentContextProvider.capture());
                 List<SystemReminder> reminders = remindersForIteration(
                         environmentReminder,
                         sessionReminders,
                         taskMode,
                         taskModeSnapshot.includeExitReminder(),
                         iteration);
+                if (skillActivator != null) {
+                    skillActivator.activeReminder().ifPresent(reminder -> {
+                        // 环境提醒必须出现在会话提醒之前，保证每轮稳定注入。
+                        reminders.add(1, reminder);
+                    });
+                }
                 if (contextManager != null) {
                     ContextResult managed = contextManager.manage(new ContextRequest(
                                     conversation.committed(), conversation.trajectory(), reminders, selection,
@@ -340,6 +398,7 @@ public final class Agent implements AutoCloseable {
         } finally {
             timeoutFuture.cancel(false);
             activeTask.compareAndSet(context, null);
+            skillScope.close();
         }
     }
 
@@ -357,7 +416,7 @@ public final class Agent implements AutoCloseable {
         if (includeExitReminder && iteration == 1) {
             combined.add(PlanModePrompt.exitReminder());
         }
-        return List.copyOf(combined);
+        return new ArrayList<>(combined);
     }
 
     private TaskModeSnapshot consumeTaskModeSnapshot() {
@@ -489,10 +548,10 @@ public final class Agent implements AutoCloseable {
         if (closed.compareAndSet(false, true)) {
             cancelActive();
             watchdog.shutdownNow();
-            if (permissionGate != null) {
-                permissionGate.close();
+            if (closeSharedResources) {
+                if (permissionGate != null) permissionGate.close();
+                client.close();
             }
-            client.close();
         }
     }
 

@@ -82,6 +82,15 @@ import io.imiocode.tool.core.GrepTool;
 import io.imiocode.tool.core.ReadFileTool;
 import io.imiocode.tool.core.WriteFileTool;
 import io.imiocode.tool.workspace.WorkspacePolicy;
+import io.imiocode.skill.DefaultSkillForkRunner;
+import io.imiocode.skill.LoadSkillTool;
+import io.imiocode.skill.SkillActivator;
+import io.imiocode.skill.SkillCommandRegistrar;
+import io.imiocode.skill.SkillCommandTool;
+import io.imiocode.skill.SkillExecutor;
+import io.imiocode.skill.SkillLoader;
+import io.imiocode.skill.SkillManagementCommand;
+import io.imiocode.skill.SkillSummaryFormatter;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -114,6 +123,8 @@ public final class ImioCodeApplication {
             ToolLimits limits = ToolLimits.defaults();
             SecretRedactor redactor = runtimeConfig.redactor();
             CommandRegistry commandRegistry = createCommandRegistry();
+            commandRegistry.register(new SkillManagementCommand());
+            commandRegistry.unregister("review");
             terminal = new JLineTerminalUi(redactor, config.ui().verbosity(), commandRegistry::complete);
             String version = VersionResolver.resolve();
             terminal.showWelcome(new UiContext(
@@ -149,6 +160,18 @@ public final class ImioCodeApplication {
             registry.register(new GlobTool(policy, limits, redactor));
             registry.register(new GrepTool(policy, limits, redactor));
 
+            SkillLoader skillLoader = new SkillLoader(workspace, userHome);
+            SkillActivator skillActivator = new SkillActivator(
+                    registry,
+                    spec -> new SkillCommandTool(spec, policy, limits, redactor));
+            SkillExecutor skillExecutor = new SkillExecutor(skillLoader, skillActivator);
+            registry.register(new LoadSkillTool(skillExecutor));
+            SkillCommandRegistrar skillCommandRegistrar = new SkillCommandRegistrar(commandRegistry);
+            skillCommandRegistrar.sync(skillLoader.snapshot());
+            for (String diagnostic : skillLoader.snapshot().diagnostics()) {
+                terminal.printError("[Skill] " + diagnostic);
+            }
+
             McpConfigLoadResult mcpConfigs = runtimeConfig.mcp();
             for (McpConfigError error : mcpConfigs.errors()) {
                 terminal.printError(formatMcpError(error));
@@ -180,19 +203,33 @@ public final class ImioCodeApplication {
                     config.context(), config.maxOutputTokens(), promptAssembler,
                     new ApproximateTokenEstimator(), offloader, summarizer);
             Clock runtimeClock = Clock.systemDefaultZone();
+            EnvironmentContextCollector environmentCollector = new EnvironmentContextCollector(
+                    workspace,
+                    runtimeClock,
+                    Duration.ofSeconds(2),
+                    config.model());
             Agent agent = new Agent(
                     client,
                     registry,
                     config.agent(),
                     config.maxOutputTokens(),
-                    new EnvironmentContextCollector(
-                            workspace,
-                            runtimeClock,
-                            Duration.ofSeconds(2),
-                            config.model()),
+                    environmentCollector,
                     new EnvironmentReminderFormatter(),
                     permissionGate,
-                    contextManager);
+                    contextManager,
+                    skillActivator);
+            LlmClient sharedClient = client;
+            skillExecutor.setForkRunner(new DefaultSkillForkRunner(() -> new Agent(
+                    sharedClient,
+                    registry,
+                    config.agent(),
+                    config.maxOutputTokens(),
+                    environmentCollector,
+                    new EnvironmentReminderFormatter(),
+                    permissionGate,
+                    contextManager,
+                    skillActivator,
+                    false)));
             session = new ConversationSession(agent);
             MarkdownMemoryStore memoryStore = new MarkdownMemoryStore(userHome, workspace);
             MemoryManager memoryManager = new MemoryManager(
@@ -230,7 +267,10 @@ public final class ImioCodeApplication {
                     workspace,
                     config.context().windowTokens(),
                     mcpStartup.connectedServers(),
-                    mcpStartup.registeredTools());
+                    mcpStartup.registeredTools(),
+                    skillExecutor,
+                    new SkillSummaryFormatter(),
+                    skillCommandRegistrar);
             String permissionMode = permissionSettings.mode().name()
                     .toLowerCase(java.util.Locale.ROOT);
             if (config.ui().verbosity() == UiVerbosity.COMPACT) {
