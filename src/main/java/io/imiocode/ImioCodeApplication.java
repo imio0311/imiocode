@@ -84,6 +84,7 @@ import io.imiocode.tool.core.WriteFileTool;
 import io.imiocode.tool.workspace.WorkspacePolicy;
 import io.imiocode.skill.DefaultSkillForkRunner;
 import io.imiocode.skill.LoadSkillTool;
+import io.imiocode.skill.InstallSkillTool;
 import io.imiocode.skill.SkillActivator;
 import io.imiocode.skill.SkillCommandRegistrar;
 import io.imiocode.skill.SkillCommandTool;
@@ -91,9 +92,18 @@ import io.imiocode.skill.SkillExecutor;
 import io.imiocode.skill.SkillLoader;
 import io.imiocode.skill.SkillManagementCommand;
 import io.imiocode.skill.SkillSummaryFormatter;
+import io.imiocode.skill.SkillParser;
+import io.imiocode.skill.install.DefaultSkillInstaller;
+import io.imiocode.skill.install.GitHubSkillFetcher;
+import io.imiocode.skill.install.JdkSkillRemoteTransport;
+import io.imiocode.skill.install.RemoteSkillLocator;
+import io.imiocode.skill.install.SkillInstallListener;
+import io.imiocode.skill.install.SkillInstallStage;
+import io.imiocode.skill.install.SkillInstaller;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.time.Clock;
 import java.time.Duration;
 
@@ -114,6 +124,7 @@ public final class ImioCodeApplication {
         ConversationCoordinator coordinator = null;
         TerminalUi terminal = null;
         McpManager mcpManager = null;
+        SkillInstaller remoteSkillInstaller = null;
         try {
             Path workspace = Path.of("").toAbsolutePath().normalize();
             Path userHome = Path.of(System.getProperty("user.home")).toAbsolutePath().normalize();
@@ -160,6 +171,7 @@ public final class ImioCodeApplication {
             registry.register(new GlobTool(policy, limits, redactor));
             registry.register(new GrepTool(policy, limits, redactor));
 
+            Files.createDirectories(workspace.resolve(".imiocode").resolve("skills"));
             SkillLoader skillLoader = new SkillLoader(workspace, userHome);
             SkillActivator skillActivator = new SkillActivator(
                     registry,
@@ -171,6 +183,28 @@ public final class ImioCodeApplication {
             for (String diagnostic : skillLoader.snapshot().diagnostics()) {
                 terminal.printError("[Skill] " + diagnostic);
             }
+            JdkSkillRemoteTransport skillTransport = new JdkSkillRemoteTransport(runtimeConfig.skillInstall());
+            TerminalUi skillTerminal = terminal;
+            SkillInstallListener installProgress = (stage, message) -> {
+                if (config.ui().verbosity() == UiVerbosity.VERBOSE
+                        || stage == SkillInstallStage.DOWNLOADING
+                        || stage == SkillInstallStage.COMPLETED) {
+                    skillTerminal.printInfo("[Skill] " + message);
+                }
+            };
+            remoteSkillInstaller = new DefaultSkillInstaller(
+                    workspace,
+                    runtimeConfig.skillInstall(),
+                    new RemoteSkillLocator(runtimeConfig.skillInstall()),
+                    new GitHubSkillFetcher(skillTransport),
+                    new SkillParser(),
+                    skillLoader,
+                    () -> {
+                        var snapshot = skillLoader.reload();
+                        skillCommandRegistrar.sync(snapshot);
+                        return snapshot;
+                    });
+            registry.register(new InstallSkillTool(remoteSkillInstaller, installProgress, limits, redactor));
 
             McpConfigLoadResult mcpConfigs = runtimeConfig.mcp();
             for (McpConfigError error : mcpConfigs.errors()) {
@@ -270,7 +304,8 @@ public final class ImioCodeApplication {
                     mcpStartup.registeredTools(),
                     skillExecutor,
                     new SkillSummaryFormatter(),
-                    skillCommandRegistrar);
+                    skillCommandRegistrar,
+                    remoteSkillInstaller);
             String permissionMode = permissionSettings.mode().name()
                     .toLowerCase(java.util.Locale.ROOT);
             if (config.ui().verbosity() == UiVerbosity.COMPACT) {
@@ -303,6 +338,9 @@ public final class ImioCodeApplication {
             }
             if (mcpManager != null) {
                 mcpManager.close();
+            }
+            if (coordinator == null && remoteSkillInstaller != null) {
+                remoteSkillInstaller.close();
             }
             if (terminal != null) {
                 terminal.close();

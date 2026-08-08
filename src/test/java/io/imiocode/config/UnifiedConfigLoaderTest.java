@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -115,6 +116,45 @@ class UnifiedConfigLoaderTest {
         assertTrue(config.mcp().servers().isEmpty());
         assertEquals(PermissionMode.ASK, config.permissions().mode());
         assertTrue(config.notices().isEmpty());
+        assertEquals(Duration.ofSeconds(30), config.skillInstall().timeout());
+        assertEquals(64, config.skillInstall().maxFiles());
+    }
+
+    @Test
+    void loadsAndValidatesSkillInstallLimits() throws Exception {
+        Path workspace = Files.createDirectories(root.resolve("skill-config-workspace"));
+        Path home = Files.createDirectories(root.resolve("skill-config-home"));
+        write(workspace.resolve("config.yaml"), """
+                provider: deepseek
+                model: deepseek-chat
+                providers:
+                  deepseek:
+                    api-key: test-key
+                skills:
+                  install:
+                    timeout-seconds: 12
+                    max-files: 8
+                    max-file-bytes: 1024
+                    max-total-bytes: 4096
+                    allowed-hosts: [skills.sh, github.com]
+                """);
+
+        RuntimeConfig config = new ConfigLoader().loadAll(workspace, home, Map.of());
+        assertEquals(Duration.ofSeconds(12), config.skillInstall().timeout());
+        assertEquals(8, config.skillInstall().maxFiles());
+
+        write(workspace.resolve("config.yaml"), """
+                provider: deepseek
+                model: deepseek-chat
+                providers:
+                  deepseek:
+                    api-key: test-key
+                skills:
+                  install:
+                    max-files: 0
+                """);
+        assertThrows(ConfigException.class,
+                () -> new ConfigLoader().loadAll(workspace, home, Map.of()));
     }
 
     @Test
@@ -190,6 +230,7 @@ class UnifiedConfigLoaderTest {
         assertEquals(PermissionMode.ASK, config.permissions().mode());
         assertEquals(2, config.permissions().projectRules().size());
         assertEquals(UiVerbosity.COMPACT, config.app().ui().verbosity());
+        assertEquals(64, config.skillInstall().maxFiles());
     }
 
     private static void writeBaseConfig(Path workspace) throws Exception {

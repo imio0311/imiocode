@@ -5,6 +5,7 @@ import io.imiocode.mcp.config.McpConfigLoader;
 import io.imiocode.permission.PermissionSettings;
 import io.imiocode.permission.rule.PermissionRuleLoader;
 import io.imiocode.tool.SecretRedactor;
+import io.imiocode.skill.install.SkillInstallConfig;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -137,6 +138,7 @@ public final class ConfigLoader {
                 app,
                 mcp,
                 permissions,
+                buildSkillInstallConfig(document.skills()),
                 redactor,
                 new ConfigSourceSummary(appSource, mcpSource, permissionSource),
                 notices);
@@ -378,6 +380,25 @@ public final class ConfigLoader {
                             ? defaults.extractionOutputTokens() : document.extractionOutputTokens());
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("配置无效：" + exception.getMessage(), exception);
+        }
+    }
+
+    private static SkillInstallConfig buildSkillInstallConfig(ConfigDocument.SkillsDocument document) {
+        SkillInstallConfig defaults = SkillInstallConfig.defaults();
+        ConfigDocument.InstallDocument install = document == null ? null : document.install();
+        try {
+            return new SkillInstallConfig(
+                    Duration.ofSeconds(install == null || install.timeoutSeconds() == null
+                            ? defaults.timeout().toSeconds() : install.timeoutSeconds()),
+                    install == null || install.maxFiles() == null ? defaults.maxFiles() : install.maxFiles(),
+                    install == null || install.maxFileBytes() == null
+                            ? defaults.maxFileBytes() : install.maxFileBytes(),
+                    install == null || install.maxTotalBytes() == null
+                            ? defaults.maxTotalBytes() : install.maxTotalBytes(),
+                    install == null || install.allowedHosts() == null
+                            ? defaults.allowedHosts() : install.allowedHosts());
+        } catch (IllegalArgumentException exception) {
+            throw new ConfigException("config.yaml 配置项 skills.install 无效：" + exception.getMessage(), exception);
         }
     }
 

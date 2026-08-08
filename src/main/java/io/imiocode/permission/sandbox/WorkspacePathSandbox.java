@@ -28,6 +28,7 @@ public final class WorkspacePathSandbox implements PathSandbox {
             switch (request.call().name().toLowerCase(Locale.ROOT)) {
                 case "read_file", "edit_file" -> policy.resolveExistingFile(target);
                 case "write_file" -> policy.resolveWritableFile(target);
+                case "install_skill" -> policy.resolveWritableFile(target);
                 case "grep" -> policy.resolveExistingPath(target);
                 case "glob" -> {
                     // Glob 始终遍历工作区；这里只验证 pattern 本身不能表达越界根。

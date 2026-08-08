@@ -16,6 +16,8 @@ import java.util.Set;
 
 /** YAML frontmatter、Markdown 正文和 tool.json 的统一解析器。 */
 public final class SkillParser {
+    private static final Set<String> STANDARD_SKILL_TOOLS = Set.of(
+            "read_file", "write_file", "edit_file", "glob", "grep");
     private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory());
     private final ObjectMapper json = new ObjectMapper();
 
@@ -72,7 +74,8 @@ public final class SkillParser {
                 historyText == null ? "recent" : historyText, SkillHistoryMode.class, "history");
         Set<String> aliases = stringSet(node.get("aliases"), "aliases");
         JsonNode allowedNode = first(node, "allowedTools", "allowed-tools", "allowed_tools");
-        Set<String> allowed = stringSet(allowedNode, "allowedTools");
+        Set<String> allowed = allowedNode == null
+                ? STANDARD_SKILL_TOOLS : stringSet(allowedNode, "allowedTools");
         return new SkillMetadata(name, description, mode, history, aliases, allowed);
     }
 

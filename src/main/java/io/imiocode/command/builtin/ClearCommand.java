@@ -18,6 +18,7 @@ public final class ClearCommand implements Command {
     @Override
     public CommandResult execute(CommandContext context, List<String> arguments) {
         if (!arguments.isEmpty()) throw new IllegalArgumentException("/clear 不接受参数");
+        context.services().cancelActiveWork();
         context.ui().clearScreen();
         return CommandResult.handled();
     }

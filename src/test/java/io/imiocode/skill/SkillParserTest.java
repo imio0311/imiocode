@@ -85,6 +85,33 @@ class SkillParserTest {
         assertTrue(loaded.allowedTools().contains("skill_package_formatter"));
     }
 
+    @Test
+    void standardSkillWithoutWhitelistGetsSafeFileDefaultsButExplicitEmptyStaysEmpty() {
+        CountingSource standard = new CountingSource("""
+                ---
+                name: standard
+                description: 标准 Agent Skill
+                ---
+                设计界面
+                """);
+        LoadedSkill loaded = parser.parseLoaded(
+                parser.parseDescriptor(standard, SkillOrigin.PROJECT), "");
+        assertEquals(java.util.Set.of("read_file", "write_file", "edit_file", "glob", "grep"),
+                loaded.allowedTools());
+
+        CountingSource locked = new CountingSource("""
+                ---
+                name: locked
+                description: 不开放工具
+                allowedTools: []
+                ---
+                只输出建议
+                """);
+        LoadedSkill empty = parser.parseLoaded(
+                parser.parseDescriptor(locked, SkillOrigin.PROJECT), "");
+        assertTrue(empty.allowedTools().isEmpty());
+    }
+
     private static final class CountingSource implements SkillSource {
         private final String markdown;
         private final AtomicInteger frontmatterReads = new AtomicInteger();

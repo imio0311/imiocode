@@ -133,6 +133,30 @@ class PermissionCheckerTest {
         assertEquals(PermissionAction.DENY, checker.check(command("git status")).action());
     }
 
+    @Test
+    void forceSkillInstallRequiresConfirmationExceptFullAccess() {
+        PermissionRequest forceInstall = new PermissionRequest(
+                new ToolCall("install-1", "install_skill",
+                        JsonNodeFactory.instance.objectNode()
+                                .put("url", "https://skills.sh/acme/repo/demo")
+                                .put("force", true)),
+                ToolRisk.HIGH,
+                PermissionOperation.WRITE,
+                ".imiocode/skills/.install-request",
+                "安装并覆盖远程 Skill");
+
+        assertEquals(PermissionAction.DENY, checker(new PermissionSettings(
+                PermissionMode.LOCKDOWN, List.of(), List.of(), List.of())).check(forceInstall).action());
+        assertEquals(PermissionAction.DENY, checker(new PermissionSettings(
+                PermissionMode.READ_ONLY, List.of(), List.of(), List.of())).check(forceInstall).action());
+        assertEquals(PermissionAction.ASK, checker(new PermissionSettings(
+                PermissionMode.ASK, List.of(), List.of(), List.of())).check(forceInstall).action());
+        assertEquals(PermissionAction.ASK, checker(new PermissionSettings(
+                PermissionMode.AUTO_EDIT, List.of(), List.of(), List.of())).check(forceInstall).action());
+        assertEquals(PermissionAction.ALLOW, checker(new PermissionSettings(
+                PermissionMode.FULL_ACCESS, List.of(), List.of(), List.of())).check(forceInstall).action());
+    }
+
     private PermissionChecker checker(PermissionSettings settings) {
         return new PermissionChecker(
                 workspace,

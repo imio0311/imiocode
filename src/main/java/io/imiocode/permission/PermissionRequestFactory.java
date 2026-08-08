@@ -66,7 +66,7 @@ public final class PermissionRequestFactory {
                 ? normalizeCommand(rawTarget) : normalizePath(rawTarget);
         return new PermissionRequest(
                 call,
-                tool.definition().risk(),
+                provider.permissionRisk(call.arguments(), tool.definition().risk()),
                 provider.permissionOperation(),
                 normalized,
                 truncate(redactor.redact(normalized)));

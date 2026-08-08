@@ -10,6 +10,8 @@ import io.imiocode.session.SessionLoadResult;
 import io.imiocode.session.SessionSummary;
 import io.imiocode.permission.PermissionMode;
 import io.imiocode.skill.SkillCatalogSnapshot;
+import io.imiocode.skill.install.SkillInstallListener;
+import io.imiocode.skill.install.SkillInstallResult;
 import java.util.List;
 import java.util.Optional;
 
@@ -42,5 +44,13 @@ public interface CommandServices {
 
     default SkillCatalogSnapshot reloadSkills() {
         throw new IllegalStateException("Skill 功能尚未初始化");
+    }
+
+    default SkillInstallResult installSkill(String url, boolean force, SkillInstallListener listener) {
+        throw new IllegalStateException("Skill 远程安装功能尚未初始化");
+    }
+
+    default void cancelActiveWork() {
+        // 无 Agent 的命令测试环境无需取消。
     }
 }

@@ -126,6 +126,7 @@ public final class SkillLoader {
         if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) return;
         try (var entries = Files.list(root)) {
             for (Path path : entries.sorted().toList()) {
+                if (path.getFileName().toString().startsWith(".")) continue;
                 boolean directory = Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS);
                 boolean markdown = Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
                         && path.getFileName().toString().toLowerCase().endsWith(".md");

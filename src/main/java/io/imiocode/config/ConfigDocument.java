@@ -22,6 +22,7 @@ record ConfigDocument(
         InstructionsDocument instructions,
         SessionsDocument sessions,
         MemoryDocument memory,
+        SkillsDocument skills,
         McpConfigDocument mcp,
         PermissionConfigDocument permissions,
         Map<String, ProviderConfig> providers) {
@@ -37,7 +38,7 @@ record ConfigDocument(
     static ConfigDocument empty() {
         return new ConfigDocument(
                 null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, Map.of());
+                null, null, null, null, null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -62,6 +63,7 @@ record ConfigDocument(
                 + ", instructions=" + instructions
                 + ", sessions=" + sessions
                 + ", memory=" + memory
+                + ", skills=" + (skills == null ? "default" : "configured")
                 + ", mcp=" + (mcp == null ? "absent" : "configured")
                 + ", permissions=" + (permissions == null ? "absent" : "configured")
                 + ", providers=***]";
@@ -110,5 +112,16 @@ record ConfigDocument(
             @JsonProperty("max-entry-chars") Integer maxEntryChars,
             @JsonProperty("max-file-bytes") Long maxFileBytes,
             @JsonProperty("extraction-output-tokens") Integer extractionOutputTokens) {
+    }
+
+    record SkillsDocument(InstallDocument install) {
+    }
+
+    record InstallDocument(
+            @JsonProperty("timeout-seconds") Integer timeoutSeconds,
+            @JsonProperty("max-files") Integer maxFiles,
+            @JsonProperty("max-file-bytes") Long maxFileBytes,
+            @JsonProperty("max-total-bytes") Long maxTotalBytes,
+            @JsonProperty("allowed-hosts") java.util.Set<String> allowedHosts) {
     }
 }

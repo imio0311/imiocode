@@ -11,13 +11,13 @@ import java.util.List;
 import java.util.Optional;
 
 /** 文件系统 Skill；所有附件读取都被限制在包根目录内。 */
-final class FileSkillSource implements SkillSource {
+public final class FileSkillSource implements SkillSource {
     private static final long MAX_REFERENCE_BYTES = 256 * 1024;
     private final Path root;
     private final Path markdown;
     private final boolean directoryPackage;
 
-    FileSkillSource(Path candidate) {
+    public FileSkillSource(Path candidate) {
         Path normalized = candidate.toAbsolutePath().normalize();
         this.directoryPackage = Files.isDirectory(normalized, LinkOption.NOFOLLOW_LINKS);
         this.root = directoryPackage ? normalized : normalized.getParent();

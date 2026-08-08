@@ -56,6 +56,18 @@ memory:
   max-file-bytes: 262144
   extraction-output-tokens: 1024
 
+skills:
+  install:
+    timeout-seconds: 30
+    max-files: 64
+    max-file-bytes: 262144
+    max-total-bytes: 2097152
+    allowed-hosts:
+      - skills.sh
+      - github.com
+      - raw.githubusercontent.com
+      - api.github.com
+
 mcp:
   servers:
     context7:

@@ -101,7 +101,17 @@ public final class PermissionChecker {
 
             Optional<PermissionDecision> rule = ruleEngine.evaluate(request, settings);
             if (rule.isPresent()) {
-                return rule.orElseThrow();
+                PermissionDecision ruled = rule.orElseThrow();
+                if (!forceInstallConfirmation(request, settings) || ruled.action() != PermissionAction.ALLOW) {
+                    return ruled;
+                }
+                return PermissionDecision.ask(
+                        PermissionDecisionSource.MODE, "强制覆盖 Skill 需要用户确认");
+            }
+
+            if (forceInstallConfirmation(request, settings)) {
+                return PermissionDecision.ask(
+                        PermissionDecisionSource.MODE, "强制覆盖 Skill 需要用户确认");
             }
 
             if (request.operation() == PermissionOperation.COMMAND) {
@@ -122,5 +132,12 @@ public final class PermissionChecker {
     private static PermissionSettingsProvider fixed(PermissionSettings settings) {
         PermissionSettings checked = Objects.requireNonNull(settings, "settings 不能为空");
         return () -> checked;
+    }
+
+    private static boolean forceInstallConfirmation(
+            PermissionRequest request, PermissionSettings settings) {
+        return "install_skill".equalsIgnoreCase(request.call().name())
+                && request.risk() == io.imiocode.tool.ToolRisk.HIGH
+                && settings.mode() != PermissionMode.FULL_ACCESS;
     }
 }

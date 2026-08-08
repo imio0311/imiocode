@@ -81,10 +81,11 @@ class BuiltinCommandTest {
     }
 
     @Test
-    void clearOnlyTouchesUi() {
+    void clearCancelsActiveWorkBeforeTouchingUi() {
         var result = dispatch("/clear");
         assertEquals(CommandOutcome.HANDLED, result.outcome());
         assertEquals(1, ui.clearCalls);
+        assertEquals(1, services.cancelCalls);
         assertEquals(0, services.calls);
         assertTrue(result.prompt().isEmpty());
     }
@@ -187,6 +188,7 @@ class BuiltinCommandTest {
         private int compactCalls;
         private int calls;
         private int deleteCalls;
+        private int cancelCalls;
 
         @Override public AgentMode mode() { calls++; return mode; }
         @Override public void switchMode(AgentMode mode) { calls++; this.mode = mode; }
@@ -224,6 +226,7 @@ class BuiltinCommandTest {
             return new CommandStatus("deepseek", "deepseek-chat", Path.of("."), mode, permission,
                     SESSION, 8_200, 64_000, 1, 2);
         }
+        @Override public void cancelActiveWork() { cancelCalls++; }
         private static SessionSummary summary() {
             return new SessionSummary(SESSION, Instant.EPOCH, Instant.EPOCH, 0);
         }

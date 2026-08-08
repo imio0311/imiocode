@@ -33,16 +33,17 @@ class SkillLoaderTest {
     }
 
     @Test
-    void bundledCommitReviewAndTestUseSameParser() {
+    void bundledCommitReviewTestAndBackendInterviewUseSameParser() {
         SkillLoader loader = new SkillLoader(temp.resolve("project"), temp.resolve("user"),
                 Thread.currentThread().getContextClassLoader(), new SkillParser());
 
         assertEquals(SkillMode.INLINE, loader.load("commit", "x").metadata().mode());
         assertEquals(SkillMode.FORK, loader.load("review", "x").metadata().mode());
         assertEquals(SkillMode.INLINE, loader.load("test", "x").metadata().mode());
+        assertEquals(SkillMode.FORK, loader.load("backend-interview", "x").metadata().mode());
         assertTrue(loader.snapshot().sorted().stream()
                 .map(value -> value.metadata().name()).toList()
-                .containsAll(java.util.List.of("commit", "review", "test")));
+                .containsAll(java.util.List.of("commit", "review", "test", "backend-interview")));
     }
 
     @Test

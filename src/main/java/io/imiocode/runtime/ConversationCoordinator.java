@@ -36,12 +36,17 @@ import io.imiocode.skill.SkillExecutor;
 import io.imiocode.skill.SkillInvocation;
 import io.imiocode.skill.SkillMode;
 import io.imiocode.skill.SkillSummaryFormatter;
+import io.imiocode.skill.install.SkillInstallListener;
+import io.imiocode.skill.install.SkillInstallRequest;
+import io.imiocode.skill.install.SkillInstallResult;
+import io.imiocode.skill.install.SkillInstaller;
 
 import java.time.Clock;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.net.URI;
 
 /** 在核心会话之外编排持久化和记忆，保持底层 Agent 依赖单向。 */
 public final class ConversationCoordinator implements CommandServices, AutoCloseable {
@@ -65,6 +70,7 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     private final SkillExecutor skillExecutor;
     private final SkillSummaryFormatter skillSummaryFormatter;
     private final SkillCommandRegistrar skillCommandRegistrar;
+    private final SkillInstaller skillInstaller;
     private final AtomicReference<SkillInvocation> pendingSkill = new AtomicReference<>();
     private volatile long synchronizedSkillGeneration = -1;
     private SessionSnapshot current;
@@ -89,7 +95,7 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
             int registeredMcpTools) {
         this(core, sessions, sessionsConfig, memories, memoryConfig, extractor, context, events,
                 clock, permissionSettings, tokenEstimator, provider, model, workspace,
-                contextWindowTokens, connectedMcpServers, registeredMcpTools, null, null, null);
+                contextWindowTokens, connectedMcpServers, registeredMcpTools, null, null, null, null);
     }
 
     public ConversationCoordinator(
@@ -113,6 +119,34 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
             SkillExecutor skillExecutor,
             SkillSummaryFormatter skillSummaryFormatter,
             SkillCommandRegistrar skillCommandRegistrar) {
+        this(core, sessions, sessionsConfig, memories, memoryConfig, extractor, context, events,
+                clock, permissionSettings, tokenEstimator, provider, model, workspace,
+                contextWindowTokens, connectedMcpServers, registeredMcpTools,
+                skillExecutor, skillSummaryFormatter, skillCommandRegistrar, null);
+    }
+
+    public ConversationCoordinator(
+            ConversationSession core,
+            SessionManager sessions,
+            SessionsConfig sessionsConfig,
+            MemoryManager memories,
+            MemoryConfig memoryConfig,
+            MemoryExtractor extractor,
+            PersistentContextProvider context,
+            PersistenceEventListener events,
+            Clock clock,
+            RuntimePermissionSettings permissionSettings,
+            ApproximateTokenEstimator tokenEstimator,
+            String provider,
+            String model,
+            Path workspace,
+            long contextWindowTokens,
+            int connectedMcpServers,
+            int registeredMcpTools,
+            SkillExecutor skillExecutor,
+            SkillSummaryFormatter skillSummaryFormatter,
+            SkillCommandRegistrar skillCommandRegistrar,
+            SkillInstaller skillInstaller) {
         this.core = core; this.sessions = sessions; this.sessionsConfig = sessionsConfig;
         this.memories = memories; this.memoryConfig = memoryConfig; this.extractor = extractor;
         this.context = context; this.events = events == null ? PersistenceEventListener.noop() : events;
@@ -130,6 +164,7 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
         this.skillExecutor = skillExecutor;
         this.skillSummaryFormatter = skillSummaryFormatter;
         this.skillCommandRegistrar = skillCommandRegistrar;
+        this.skillInstaller = skillInstaller;
         this.current = sessionsConfig.enabled() ? sessions.createNew() : ephemeral(List.of());
         if (sessionsConfig.enabled()) sessions.applyRetention(current.metadata().id());
     }
@@ -282,6 +317,20 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     }
 
     @Override
+    public SkillInstallResult installSkill(String url, boolean force, SkillInstallListener listener) {
+        requireIdle();
+        if (skillInstaller == null) throw new IllegalStateException("Skill 远程安装功能尚未初始化");
+        PermissionMode mode = permissionSettings.mode();
+        if (mode == PermissionMode.LOCKDOWN || mode == PermissionMode.READ_ONLY) {
+            throw new IllegalStateException("当前权限模式禁止安装 Skill");
+        }
+        SkillInstallResult result = skillInstaller.install(
+                new SkillInstallRequest(URI.create(url), force), listener);
+        syncSkillCommands(skillExecutor.loader().snapshot());
+        return result;
+    }
+
+    @Override
     public void switchPermissionMode(PermissionMode mode) {
         requireIdle();
         permissionSettings.switchMode(mode);
@@ -307,11 +356,17 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     public void cancelActive() {
         core.cancelActive();
         if (skillExecutor != null) skillExecutor.cancelFork();
+        if (skillInstaller != null) skillInstaller.cancel();
     }
+    @Override public void cancelActiveWork() { cancelActive(); }
     public boolean isActive() {
         return core.isActive() || (skillExecutor != null && skillExecutor.isForkActive());
     }
-    @Override public void close() { core.close(); }
+    @Override public void close() {
+        cancelActive();
+        if (skillInstaller != null) skillInstaller.close();
+        core.close();
+    }
 
     private void requireIdle() { if (core.isActive()) throw new IllegalStateException("Agent 正在执行，暂不能切换会话"); }
     private void requireSessions() { if (!sessionsConfig.enabled()) throw new IllegalStateException("会话持久化功能已关闭"); }

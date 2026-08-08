@@ -23,7 +23,8 @@ import java.util.function.Function;
 /** 维护任务级 activeSkills、完整 SOP 和临时专属工具。 */
 public final class SkillActivator {
     public static final String LOAD_SKILL_TOOL = "load_skill";
-    private static final Set<String> SYSTEM_TOOLS = Set.of(LOAD_SKILL_TOOL);
+    public static final String INSTALL_SKILL_TOOL = "install_skill";
+    private static final Set<String> SYSTEM_TOOLS = Set.of(LOAD_SKILL_TOOL, INSTALL_SKILL_TOOL);
 
     private final ToolRegistry registry;
     private final Function<SkillToolSpec, ? extends Tool> toolFactory;
