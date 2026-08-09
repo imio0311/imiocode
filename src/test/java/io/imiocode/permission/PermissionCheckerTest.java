@@ -153,8 +153,39 @@ class PermissionCheckerTest {
                 PermissionMode.ASK, List.of(), List.of(), List.of())).check(forceInstall).action());
         assertEquals(PermissionAction.ASK, checker(new PermissionSettings(
                 PermissionMode.AUTO_EDIT, List.of(), List.of(), List.of())).check(forceInstall).action());
+        PermissionRule explicitAllow = new PermissionRule(
+                PermissionRuleLayer.USER, PermissionAction.ALLOW,
+                "install_skill", Optional.of(".imiocode/skills/.install-request"));
+        assertEquals(PermissionAction.ASK, checker(new PermissionSettings(
+                PermissionMode.AUTO_EDIT, List.of(explicitAllow), List.of(), List.of()))
+                .check(forceInstall).action());
         assertEquals(PermissionAction.ALLOW, checker(new PermissionSettings(
                 PermissionMode.FULL_ACCESS, List.of(), List.of(), List.of())).check(forceInstall).action());
+    }
+
+    @Test
+    void autoEditAllowsMediumCommandsAndRulesCanTrustUnknownRemoteTools() {
+        PermissionChecker automatic = checker(new PermissionSettings(
+                PermissionMode.AUTO_EDIT, List.of(), List.of(), List.of()));
+        PermissionRequest build = new PermissionRequest(
+                new ToolCall("build-1", "bash",
+                        JsonNodeFactory.instance.objectNode().put("command", "mvn test")),
+                ToolRisk.MEDIUM, PermissionOperation.COMMAND,
+                "mvn test", "mvn test", "普通本地开发命令");
+        PermissionRequest mcp = new PermissionRequest(
+                new ToolCall("mcp-1", "mcp_demo__query", JsonNodeFactory.instance.objectNode()),
+                ToolRisk.HIGH, PermissionOperation.COMMAND,
+                "mcp_demo__query", "mcp_demo__query", "未知远程工具");
+
+        assertEquals(PermissionAction.ALLOW, automatic.check(build).action());
+        assertEquals(PermissionAction.ASK, automatic.check(mcp).action());
+
+        PermissionRule trustMcp = new PermissionRule(
+                PermissionRuleLayer.USER, PermissionAction.ALLOW,
+                "mcp_demo__query", Optional.of("mcp_demo__query"));
+        PermissionChecker trusted = checker(new PermissionSettings(
+                PermissionMode.AUTO_EDIT, List.of(trustMcp), List.of(), List.of()));
+        assertEquals(PermissionAction.ALLOW, trusted.check(mcp).action());
     }
 
     private PermissionChecker checker(PermissionSettings settings) {

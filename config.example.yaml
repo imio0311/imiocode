@@ -81,7 +81,7 @@ mcp:
       call-timeout-seconds: 120
 
 permissions:
-  mode: ask
+  mode: auto-edit
   rules:
     - action: allow
       tool: mcp_context7__query-docs

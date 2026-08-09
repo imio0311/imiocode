@@ -35,11 +35,11 @@ public final class PermissionModePolicy {
                     PermissionDecisionSource.MODE, "ASK 模式自动允许只读工具")
                     : PermissionDecision.ask(
                     PermissionDecisionSource.MODE, "ASK 模式需要用户确认");
-            case AUTO_EDIT -> request.operation() == PermissionOperation.COMMAND
+            case AUTO_EDIT -> request.risk() == io.imiocode.tool.ToolRisk.HIGH
                     ? PermissionDecision.ask(
-                    PermissionDecisionSource.MODE, "AUTO_EDIT 模式执行命令需要确认")
+                    PermissionDecisionSource.MODE, request.riskReason())
                     : PermissionDecision.allow(
-                    PermissionDecisionSource.MODE, "AUTO_EDIT 模式允许文件操作");
+                    PermissionDecisionSource.MODE, request.riskReason());
             case FULL_ACCESS -> PermissionDecision.allow(
                     PermissionDecisionSource.MODE, "FULL_ACCESS 模式允许普通操作");
         };

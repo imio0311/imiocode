@@ -43,16 +43,23 @@ public final class StrictSafeCommandDetector implements SafeCommandDetector {
     private final Path workspace;
     private final Path workspaceReal;
     private final ShellCommandScanner scanner;
+    private final ShellCommandTokenizer tokenizer;
 
     public StrictSafeCommandDetector(Path workspace) {
-        this(workspace, new ShellCommandScanner());
+        this(workspace, new ShellCommandScanner(), new ShellCommandTokenizer());
     }
 
     StrictSafeCommandDetector(Path workspace, ShellCommandScanner scanner) {
+        this(workspace, scanner, new ShellCommandTokenizer());
+    }
+
+    public StrictSafeCommandDetector(
+            Path workspace, ShellCommandScanner scanner, ShellCommandTokenizer tokenizer) {
         this.workspace = Objects.requireNonNull(workspace, "workspace 不能为空")
                 .toAbsolutePath().normalize();
         this.workspaceReal = resolveRealPath(this.workspace);
         this.scanner = Objects.requireNonNull(scanner, "scanner 不能为空");
+        this.tokenizer = Objects.requireNonNull(tokenizer, "tokenizer 不能为空");
     }
 
     @Override
@@ -62,7 +69,7 @@ public final class StrictSafeCommandDetector implements SafeCommandDetector {
             return SafeCommandResult.uncertain(scan.reason());
         }
         for (String segment : scan.segments()) {
-            TokenizeResult tokenized = tokenize(segment);
+            ShellTokenizeResult tokenized = tokenizer.tokenize(segment);
             if (!tokenized.valid()) {
                 return SafeCommandResult.uncertain(tokenized.reason());
             }
@@ -308,80 +315,4 @@ public final class StrictSafeCommandDetector implements SafeCommandDetector {
         return value.toLowerCase(Locale.ROOT);
     }
 
-    private static TokenizeResult tokenize(String segment) {
-        List<String> tokens = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        char quote = 0;
-        boolean tokenStarted = false;
-
-        for (int index = 0; index < segment.length(); index++) {
-            char character = segment.charAt(index);
-            if (quote == '\'') {
-                if (character == '\'') {
-                    quote = 0;
-                } else {
-                    current.append(character);
-                }
-                tokenStarted = true;
-                continue;
-            }
-            if (quote == '"') {
-                if (character == '\\' && index + 1 < segment.length()
-                        && segment.charAt(index + 1) == '"') {
-                    current.append('"');
-                    index++;
-                } else if (character == '"') {
-                    quote = 0;
-                } else {
-                    current.append(character);
-                }
-                tokenStarted = true;
-                continue;
-            }
-            if (character == '\'' || character == '"') {
-                quote = character;
-                tokenStarted = true;
-                continue;
-            }
-            if (Character.isWhitespace(character)) {
-                if (tokenStarted) {
-                    tokens.add(current.toString());
-                    current.setLength(0);
-                    tokenStarted = false;
-                }
-                continue;
-            }
-            if (character == '\\' && index + 1 < segment.length()
-                    && Character.isWhitespace(segment.charAt(index + 1))) {
-                current.append(segment.charAt(++index));
-                tokenStarted = true;
-                continue;
-            }
-            current.append(character);
-            tokenStarted = true;
-        }
-        if (quote != 0) {
-            return TokenizeResult.invalid("命令包含未闭合引号");
-        }
-        if (tokenStarted) {
-            tokens.add(current.toString());
-        }
-        return tokens.isEmpty()
-                ? TokenizeResult.invalid("命令段不能为空")
-                : TokenizeResult.valid(tokens);
-    }
-
-    private record TokenizeResult(boolean valid, List<String> tokens, String reason) {
-        private TokenizeResult {
-            tokens = List.copyOf(tokens);
-        }
-
-        private static TokenizeResult valid(List<String> tokens) {
-            return new TokenizeResult(true, tokens, "");
-        }
-
-        private static TokenizeResult invalid(String reason) {
-            return new TokenizeResult(false, List.of(), reason);
-        }
-    }
 }

@@ -20,7 +20,7 @@ class PermissionApplicationE2ETest {
     Path userHome;
 
     @Test
-    void asksBeforeWritingAndContinuesAgentLoopAfterApproval() throws Exception {
+    void defaultAutoEditWritesWithoutHitlAndContinuesAgentLoop() throws Exception {
         Path workspace = Files.createDirectory(userHome.resolve("write-work"));
         Path target = workspace.resolve("permission-e2e.txt");
         Files.deleteIfExists(target);
@@ -68,7 +68,6 @@ class PermissionApplicationE2ETest {
                 try (OutputStreamWriter input = new OutputStreamWriter(
                         process.getOutputStream(), StandardCharsets.UTF_8)) {
                     input.write("请创建一个测试文件。\n");
-                    input.write("1\n");
                     input.write("/exit\n");
                     input.flush();
                 }
@@ -76,9 +75,7 @@ class PermissionApplicationE2ETest {
                 assertTrue(process.waitFor(20, TimeUnit.SECONDS), "应用未在时限内退出");
                 String output = outputFuture.get(2, TimeUnit.SECONDS);
                 assertEquals(0, process.exitValue(), output);
-                assertTrue(output.contains("[权限确认]"), output);
-                assertTrue(output.contains("write_file"), output);
-                assertTrue(output.contains("已允许本次操作"), output);
+                assertFalse(output.contains("[权限确认]"), output);
                 assertTrue(output.contains("文件已安全写入"), output);
                 assertEquals("approved", Files.readString(target));
             } finally {
@@ -127,20 +124,83 @@ class PermissionApplicationE2ETest {
     }
 
     @Test
-    void nonWhitelistedCommandStillUsesHitl() throws Exception {
+    void highRiskCommandUsesHitl() throws Exception {
         try (MockLlmServer server = new MockLlmServer()) {
-            enqueueToolCall(server, "call_ask", "echo permission-e2e");
-            enqueueFinalText(server, "普通命令已在确认后执行。");
+            enqueueToolCall(server, "call_ask", "git push origin main");
+            enqueueFinalText(server, "高风险命令已在确认后处理。");
 
             ProcessResult result = runConversation(
                     Files.createDirectory(userHome.resolve("ask-work")),
                     server,
-                    "请执行普通命令。\n1\n/exit\n");
+                    "请执行 Git 推送。\n1\n/exit\n");
 
             assertEquals(0, result.exitCode(), result.output());
             assertTrue(result.output().contains("[权限确认]"), result.output());
+            assertTrue(result.output().contains("风险=high"), result.output());
             assertTrue(result.output().contains("已允许本次操作"), result.output());
-            assertTrue(result.output().contains("普通命令已在确认后执行"), result.output());
+            assertTrue(result.output().contains("高风险命令已在确认后处理"), result.output());
+        }
+    }
+
+    @Test
+    void mediumLocalCommandRunsWithoutHitl() throws Exception {
+        try (MockLlmServer server = new MockLlmServer()) {
+            enqueueToolCall(server, "call_medium", "echo permission-e2e");
+            enqueueFinalText(server, "普通本地命令已自动执行。");
+
+            ProcessResult result = runConversation(
+                    Files.createDirectory(userHome.resolve("medium-work")),
+                    server,
+                    "请执行普通本地命令。\n/exit\n");
+
+            assertEquals(0, result.exitCode(), result.output());
+            assertFalse(result.output().contains("[权限确认]"), result.output());
+            assertTrue(result.output().contains("普通本地命令已自动执行"), result.output());
+        }
+    }
+
+    @Test
+    void explicitAskModeStillRequiresHitlForWrites() throws Exception {
+        Path workspace = Files.createDirectory(userHome.resolve("explicit-ask-work"));
+        Path target = workspace.resolve("ask-mode.txt");
+        try (MockLlmServer server = new MockLlmServer()) {
+            server.enqueueSse("""
+                    data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_ask_write","function":{"name":"write_file","arguments":"{\\"path\\":\\"ask-mode.txt\\",\\"content\\":\\"confirmed\\"}"}}]},"finish_reason":"tool_calls"}]}
+
+                    data: [DONE]
+
+                    """);
+            enqueueFinalText(server, "ASK 模式写入完成。");
+
+            ProcessResult result = runConversation(
+                    workspace, server,
+                    "/permission ask\n请创建文件。\n1\n/exit\n");
+
+            assertEquals(0, result.exitCode(), result.output());
+            assertTrue(result.output().contains("[权限确认]"), result.output());
+            assertTrue(result.output().contains("write_file"), result.output());
+            assertEquals("confirmed", Files.readString(target));
+        }
+    }
+
+    @Test
+    void denyingHighRiskDeleteLeavesFileUntouched() throws Exception {
+        Path workspace = Files.createDirectory(userHome.resolve("deny-delete-work"));
+        Path target = workspace.resolve("protected.txt");
+        Files.writeString(target, "keep-me");
+        try (MockLlmServer server = new MockLlmServer()) {
+            enqueueToolCall(server, "call_delete", "rm protected.txt");
+            enqueueFinalText(server, "删除操作已取消。");
+
+            ProcessResult result = runConversation(
+                    workspace, server,
+                    "请删除 protected.txt。\n3\n/exit\n");
+
+            assertEquals(0, result.exitCode(), result.output());
+            assertTrue(result.output().contains("[权限确认]"), result.output());
+            assertTrue(result.output().contains("风险=high"), result.output());
+            assertTrue(result.output().contains("已拒绝"), result.output());
+            assertEquals("keep-me", Files.readString(target));
         }
     }
 

@@ -6,6 +6,9 @@ import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolDefinition;
 import io.imiocode.tool.Tool;
+import io.imiocode.permission.command.CommandRiskAssessment;
+import io.imiocode.permission.command.CommandRiskClassifier;
+import io.imiocode.tool.ToolRisk;
 
 import java.util.Locale;
 import java.util.Map;
@@ -24,9 +27,18 @@ public final class PermissionRequestFactory {
             "bash", PermissionOperation.COMMAND);
 
     private final SecretRedactor redactor;
+    private final CommandRiskClassifier commandRiskClassifier;
 
     public PermissionRequestFactory(SecretRedactor redactor) {
+        this(redactor, command -> new CommandRiskAssessment(
+                ToolRisk.HIGH, "命令未启用动态风险分类，按高风险处理"));
+    }
+
+    public PermissionRequestFactory(
+            SecretRedactor redactor, CommandRiskClassifier commandRiskClassifier) {
         this.redactor = Objects.requireNonNull(redactor, "redactor 不能为空");
+        this.commandRiskClassifier = Objects.requireNonNull(
+                commandRiskClassifier, "commandRiskClassifier 不能为空");
     }
 
     public PermissionRequest create(ToolCall call, ToolDefinition definition) {
@@ -51,8 +63,12 @@ public final class PermissionRequestFactory {
                 ? normalizeCommand(rawTarget)
                 : normalizePath(rawTarget);
         String display = truncate(redactor.redact(normalized));
+        CommandRiskAssessment assessment = "bash".equals(toolName)
+                ? commandRiskClassifier.classify(normalized)
+                : new CommandRiskAssessment(definition.risk(),
+                "工具声明的静态风险等级为 " + definition.risk());
         return new PermissionRequest(
-                call, definition.risk(), operation, normalized, display);
+                call, assessment.risk(), operation, normalized, display, assessment.reason());
     }
 
     /** 动态工具可提供渲染后的真实目标，确保仍经过危险命令与规则检查。 */
@@ -64,12 +80,14 @@ public final class PermissionRequestFactory {
         String rawTarget = provider.permissionTarget(call.arguments());
         String normalized = provider.permissionOperation() == PermissionOperation.COMMAND
                 ? normalizeCommand(rawTarget) : normalizePath(rawTarget);
+        ToolRisk risk = provider.permissionRisk(call.arguments(), tool.definition().risk());
         return new PermissionRequest(
                 call,
-                provider.permissionRisk(call.arguments(), tool.definition().risk()),
+                risk,
                 provider.permissionOperation(),
                 normalized,
-                truncate(redactor.redact(normalized)));
+                truncate(redactor.redact(normalized)),
+                "工具根据本次调用参数标记为 " + risk);
     }
 
     private static String requireText(ObjectNode arguments, String field) {

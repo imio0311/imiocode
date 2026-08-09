@@ -61,6 +61,9 @@ import io.imiocode.permission.PermissionRequestFactory;
 import io.imiocode.permission.PermissionSettings;
 import io.imiocode.permission.RuntimePermissionSettings;
 import io.imiocode.permission.command.RegexDangerousCommandDetector;
+import io.imiocode.permission.command.RegexCommandRiskClassifier;
+import io.imiocode.permission.command.ShellCommandScanner;
+import io.imiocode.permission.command.ShellCommandTokenizer;
 import io.imiocode.permission.command.StrictSafeCommandDetector;
 import io.imiocode.permission.rule.PermissionRuleEngine;
 import io.imiocode.permission.sandbox.WorkspacePathSandbox;
@@ -151,6 +154,12 @@ public final class ImioCodeApplication {
             PermissionSettings permissionSettings = runtimeConfig.permissions();
             RuntimePermissionSettings runtimePermissionSettings = new RuntimePermissionSettings(permissionSettings);
             WorkspacePathSandbox sandbox = new WorkspacePathSandbox(policy);
+            ShellCommandScanner commandScanner = new ShellCommandScanner();
+            ShellCommandTokenizer commandTokenizer = new ShellCommandTokenizer();
+            StrictSafeCommandDetector safeCommandDetector = new StrictSafeCommandDetector(
+                    workspace, commandScanner, commandTokenizer);
+            RegexCommandRiskClassifier commandRiskClassifier = new RegexCommandRiskClassifier(
+                    safeCommandDetector, commandScanner, commandTokenizer);
             PermissionChecker permissionChecker = new PermissionChecker(
                     workspace,
                     new RegexDangerousCommandDetector(),
@@ -158,9 +167,9 @@ public final class ImioCodeApplication {
                     new PermissionRuleEngine(),
                     new PermissionModePolicy(),
                     runtimePermissionSettings,
-                    new StrictSafeCommandDetector(workspace));
+                    safeCommandDetector);
             PermissionGate permissionGate = new PermissionGate(
-                    new PermissionRequestFactory(redactor),
+                    new PermissionRequestFactory(redactor, commandRiskClassifier),
                     permissionChecker,
                     new PermissionCoordinator());
             ToolRegistry registry = new ToolRegistry();

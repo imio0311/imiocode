@@ -67,7 +67,7 @@ class ConversationCoordinatorTest {
                     () -> coordinator.switchPermissionMode(PermissionMode.FULL_ACCESS));
             assertThrows(IllegalStateException.class, coordinator::newSession);
             assertEquals(AgentMode.DO, coordinator.mode());
-            assertEquals(PermissionMode.ASK, coordinator.permissionMode());
+            assertEquals(PermissionMode.AUTO_EDIT, coordinator.permissionMode());
 
             client.release.countDown();
             running.get(2, TimeUnit.SECONDS);

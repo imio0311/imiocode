@@ -11,13 +11,13 @@ public record PermissionSettings(
         List<PermissionRule> localRules
 ) {
     public PermissionSettings {
-        mode = Objects.requireNonNullElse(mode, PermissionMode.ASK);
+        mode = Objects.requireNonNullElse(mode, PermissionMode.AUTO_EDIT);
         userRules = List.copyOf(Objects.requireNonNullElse(userRules, List.of()));
         projectRules = List.copyOf(Objects.requireNonNullElse(projectRules, List.of()));
         localRules = List.copyOf(Objects.requireNonNullElse(localRules, List.of()));
     }
 
     public static PermissionSettings defaults() {
-        return new PermissionSettings(PermissionMode.ASK, List.of(), List.of(), List.of());
+        return new PermissionSettings(PermissionMode.AUTO_EDIT, List.of(), List.of(), List.of());
     }
 }

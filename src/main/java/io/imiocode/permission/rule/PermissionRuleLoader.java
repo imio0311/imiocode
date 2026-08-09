@@ -62,7 +62,7 @@ public final class PermissionRuleLoader {
         Objects.requireNonNull(document, "document 不能为空");
         try {
             LayerDocument project = convert(document, PermissionRuleLayer.PROJECT);
-            PermissionMode mode = project.mode() == null ? PermissionMode.ASK : project.mode();
+            PermissionMode mode = project.mode() == null ? PermissionMode.AUTO_EDIT : project.mode();
             return new PermissionSettings(mode, List.of(), project.rules(), List.of());
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("config.yaml 的 " + exception.getMessage(), exception);
@@ -128,7 +128,7 @@ public final class PermissionRuleLoader {
                 return layer.mode();
             }
         }
-        return PermissionMode.ASK;
+        return PermissionMode.AUTO_EDIT;
     }
 
     private static String safeName(PermissionRuleLayer layer) {

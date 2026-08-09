@@ -12,7 +12,7 @@ public enum PermissionMode {
 
     public static PermissionMode parse(String value) {
         if (value == null || value.isBlank()) {
-            return ASK;
+            return AUTO_EDIT;
         }
         try {
             return valueOf(value.trim().replace('-', '_').toUpperCase(Locale.ROOT));

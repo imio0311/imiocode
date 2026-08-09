@@ -12,9 +12,9 @@ class PermissionModePolicyTest {
 
     @Test
     void implementsFiveModeSpectrum() {
-        PermissionRequest read = request("read_file", PermissionOperation.READ);
-        PermissionRequest write = request("write_file", PermissionOperation.WRITE);
-        PermissionRequest command = request("bash", PermissionOperation.COMMAND);
+        PermissionRequest read = request("read_file", PermissionOperation.READ, ToolRisk.LOW);
+        PermissionRequest write = request("write_file", PermissionOperation.WRITE, ToolRisk.MEDIUM);
+        PermissionRequest command = request("bash", PermissionOperation.COMMAND, ToolRisk.HIGH);
 
         assertEquals(PermissionAction.DENY,
                 policy.evaluate(read, PermissionMode.LOCKDOWN).action());
@@ -28,16 +28,20 @@ class PermissionModePolicyTest {
                 policy.evaluate(write, PermissionMode.AUTO_EDIT).action());
         assertEquals(PermissionAction.ASK,
                 policy.evaluate(command, PermissionMode.AUTO_EDIT).action());
+        assertEquals(PermissionAction.ASK,
+                policy.evaluate(request("write_file", PermissionOperation.WRITE, ToolRisk.HIGH),
+                        PermissionMode.AUTO_EDIT).action());
         assertEquals(PermissionAction.ALLOW,
                 policy.evaluate(command, PermissionMode.FULL_ACCESS).action());
     }
 
-    static PermissionRequest request(String tool, PermissionOperation operation) {
+    static PermissionRequest request(String tool, PermissionOperation operation, ToolRisk risk) {
         return new PermissionRequest(
                 new ToolCall("1", tool, JsonNodeFactory.instance.objectNode()),
-                operation == PermissionOperation.READ ? ToolRisk.LOW : ToolRisk.HIGH,
+                risk,
                 operation,
                 "target",
-                "target");
+                "target",
+                "动态风险原因");
     }
 }

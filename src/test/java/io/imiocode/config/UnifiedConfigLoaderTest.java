@@ -114,7 +114,7 @@ class UnifiedConfigLoaderTest {
         assertEquals(ConfigSource.DEFAULT, config.sources().mcp());
         assertEquals(ConfigSource.DEFAULT, config.sources().permissions());
         assertTrue(config.mcp().servers().isEmpty());
-        assertEquals(PermissionMode.ASK, config.permissions().mode());
+        assertEquals(PermissionMode.AUTO_EDIT, config.permissions().mode());
         assertTrue(config.notices().isEmpty());
         assertEquals(Duration.ofSeconds(30), config.skillInstall().timeout());
         assertEquals(64, config.skillInstall().maxFiles());
@@ -208,7 +208,7 @@ class UnifiedConfigLoaderTest {
         assertEquals(ConfigSource.UNIFIED, config.sources().mcp());
         assertEquals(ConfigSource.UNIFIED, config.sources().permissions());
         assertTrue(config.mcp().servers().isEmpty());
-        assertEquals(PermissionMode.ASK, config.permissions().mode());
+        assertEquals(PermissionMode.AUTO_EDIT, config.permissions().mode());
         assertTrue(config.notices().isEmpty());
     }
 
@@ -227,7 +227,7 @@ class UnifiedConfigLoaderTest {
         assertEquals(ConfigSource.UNIFIED, config.sources().mcp());
         assertEquals(ConfigSource.UNIFIED, config.sources().permissions());
         assertTrue(config.mcp().servers().containsKey("context7"));
-        assertEquals(PermissionMode.ASK, config.permissions().mode());
+        assertEquals(PermissionMode.AUTO_EDIT, config.permissions().mode());
         assertEquals(2, config.permissions().projectRules().size());
         assertEquals(UiVerbosity.COMPACT, config.app().ui().verbosity());
         assertEquals(64, config.skillInstall().maxFiles());

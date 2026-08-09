@@ -5,6 +5,7 @@ import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolCall;
 import io.imiocode.tool.ToolDefinition;
 import io.imiocode.tool.ToolRisk;
+import io.imiocode.permission.command.CommandRiskAssessment;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -55,6 +56,27 @@ class PermissionRequestFactoryTest {
         assertEquals("mcp_github__issues_list", request.normalizedTarget());
         assertEquals("mcp_github__issues_list", request.displayTarget());
         assertTrue(!request.displayTarget().contains("secret-key"));
+    }
+
+    @Test
+    void usesDynamicRiskForBashButKeepsMcpStaticRisk() {
+        PermissionRequestFactory dynamic = new PermissionRequestFactory(
+                new SecretRedactor("secret-key"),
+                command -> command.startsWith("git push")
+                        ? new CommandRiskAssessment(ToolRisk.HIGH, "Git 远程写入")
+                        : new CommandRiskAssessment(ToolRisk.MEDIUM, "普通本地开发命令"));
+
+        PermissionRequest build = dynamic.create(
+                call("bash", "command", "mvn test"), definition("bash", ToolRisk.HIGH));
+        PermissionRequest push = dynamic.create(
+                call("bash", "command", "git push origin main"), definition("bash", ToolRisk.HIGH));
+        PermissionRequest mcp = dynamic.create(
+                call("mcp_demo__query", "value", "x"), definition("mcp_demo__query", ToolRisk.HIGH));
+
+        assertEquals(ToolRisk.MEDIUM, build.risk());
+        assertEquals("普通本地开发命令", build.riskReason());
+        assertEquals(ToolRisk.HIGH, push.risk());
+        assertEquals(ToolRisk.HIGH, mcp.risk());
     }
 
     private static ToolCall call(String tool, String field, String value) {

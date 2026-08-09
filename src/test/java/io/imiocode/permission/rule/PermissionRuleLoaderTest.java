@@ -53,10 +53,10 @@ class PermissionRuleLoaderTest {
     }
 
     @Test
-    void defaultsToAskAndFailsOnUnknownFields() throws IOException {
+    void defaultsToAutoEditAndFailsOnUnknownFields() throws IOException {
         Path workspace = Files.createDirectory(root.resolve("work-default"));
         Path home = Files.createDirectory(root.resolve("home-default"));
-        assertEquals(PermissionMode.ASK,
+        assertEquals(PermissionMode.AUTO_EDIT,
                 new PermissionRuleLoader().load(workspace, home).mode());
 
         Files.createDirectories(workspace.resolve(".imiocode"));
@@ -88,7 +88,7 @@ class PermissionRuleLoaderTest {
         PermissionSettings settings = new PermissionRuleLoader().loadUnified(
                 new PermissionConfigDocument(null, null));
 
-        assertEquals(PermissionMode.ASK, settings.mode());
+        assertEquals(PermissionMode.AUTO_EDIT, settings.mode());
         assertEquals(List.of(), settings.projectRules());
     }
 

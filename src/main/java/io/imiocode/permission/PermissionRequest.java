@@ -11,7 +11,8 @@ public record PermissionRequest(
         ToolRisk risk,
         PermissionOperation operation,
         String normalizedTarget,
-        String displayTarget
+        String displayTarget,
+        String riskReason
 ) {
     public PermissionRequest {
         call = Objects.requireNonNull(call, "call 不能为空");
@@ -19,6 +20,17 @@ public record PermissionRequest(
         operation = Objects.requireNonNull(operation, "operation 不能为空");
         normalizedTarget = requireText(normalizedTarget, "normalizedTarget");
         displayTarget = requireText(displayTarget, "displayTarget");
+        riskReason = requireText(riskReason, "riskReason");
+    }
+
+    public PermissionRequest(
+            ToolCall call,
+            ToolRisk risk,
+            PermissionOperation operation,
+            String normalizedTarget,
+            String displayTarget) {
+        this(call, risk, operation, normalizedTarget, displayTarget,
+                "工具声明的静态风险等级为 " + Objects.requireNonNull(risk, "risk 不能为空"));
     }
 
     private static String requireText(String value, String name) {
