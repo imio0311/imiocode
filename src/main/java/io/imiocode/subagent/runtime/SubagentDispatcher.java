@@ -53,8 +53,11 @@ public final class SubagentDispatcher {
         definition = definition.withAdditionalDeniedTools(additionallyDeniedTools);
         AgentIsolation requested = isolation == null || isolation.isBlank()
                 ? definition.isolation() : AgentIsolation.parse(isolation);
-        if (requested != AgentIsolation.NONE) throw new IllegalArgumentException("CH13 暂不支持 worktree isolation");
+        definition = definition.withIsolation(requested);
         String relativeCwd = validateCwd(cwd);
+        if (requested == AgentIsolation.WORKTREE && !".".equals(relativeCwd)) {
+            throw new IllegalArgumentException("cwd 与 isolation: worktree 不能同时使用");
+        }
         if (!".".equals(relativeCwd)) prompt = "任务工作目录为 " + relativeCwd
                 + "；所有文件路径请以项目根为基准并带此前缀。\n\n" + prompt;
         List<ChatMessage> history = List.copyOf(parentHistory.get());

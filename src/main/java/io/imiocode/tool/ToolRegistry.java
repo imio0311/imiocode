@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Collection;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** 集中管理工具注册、启用、禁用和协议导出。 */
@@ -107,6 +108,23 @@ public final class ToolRegistry {
 
     public <T> List<T> exportEnabled(ToolDefinitionEncoder<T> encoder) {
         return exportEnabled(ToolSelection.allEnabled(), encoder);
+    }
+
+    /** 复制注册状态，并用同名工具替换工作区相关实现。 */
+    public synchronized ToolRegistry copyWithReplacements(Collection<? extends Tool> replacements) {
+        Map<String, Tool> replacementMap = new LinkedHashMap<>();
+        for (Tool replacement : Objects.requireNonNullElse(replacements, List.<Tool>of())) {
+            Tool checked = Objects.requireNonNull(replacement);
+            String name = checked.definition().name();
+            if (!tools.containsKey(name)) throw new IllegalArgumentException("不能替换未注册工具: " + name);
+            if (replacementMap.putIfAbsent(name, checked) != null) throw new IllegalArgumentException("重复替换工具: " + name);
+        }
+        ToolRegistry copy = new ToolRegistry();
+        for (Map.Entry<String, Tool> entry : tools.entrySet()) {
+            copy.register(replacementMap.getOrDefault(entry.getKey(), entry.getValue()));
+            if (!enabled.contains(entry.getKey())) copy.disable(entry.getKey());
+        }
+        return copy;
     }
 
     public <T> List<T> exportEnabled(

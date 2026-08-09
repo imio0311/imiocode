@@ -57,6 +57,9 @@ public final class ConversationLoop {
                 if (outcome == CommandOutcome.EXIT_REQUESTED) {
                     requestStop(); break;
                 }
+                if (outcome == CommandOutcome.RESTART_REQUESTED) {
+                    requestStop(); break;
+                }
                 if (outcome == CommandOutcome.FORWARD_TO_AGENT) {
                     runAgent(command.orElseThrow().prompt().orElseThrow());
                 } else {

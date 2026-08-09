@@ -9,7 +9,35 @@ Agent 定义使用 YAML frontmatter + Markdown 正文，按“项目 `.imiocode/
 
 后台任务命令：`/tasks`、`/task info <id>`、`/task cancel <id>`。模型别名、全局禁用工具、
 后台白名单和容量配置统一位于 `config.yaml` 的 `subagents:` 区域。`haiku` 未映射时会回退
-父模型并显示警告。本章只支持 `isolation: none`，请求 `worktree` 会被明确拒绝。
+父模型并显示警告。Agent 定义可使用 `isolation: none` 或 `isolation: worktree`；内置 Agent
+默认使用独立 Worktree。
+
+## Git Worktree 隔离（CH14）
+
+`/worktree` 是完全本地的管理命令，不会调用模型：
+
+```text
+/worktree list
+/worktree create <slug>
+/worktree enter <slug>
+/worktree exit [keep|remove]
+/worktree remove <slug>
+```
+
+slug 只接受 1–64 个 ASCII 字母、数字、点、下划线或连字符，并拒绝路径、`..`、盘符、
+首尾空白和尾点。Worktree 默认创建在 `.imiocode/worktrees/`，分支名为
+`worktree-<slug>`。进入或退出时，ImioCode 会关闭当前工作区运行时，再按目标目录重建
+Agent、文件与 Bash 工具、权限沙箱、Hook、MCP、会话和子 Agent 运行时。
+
+`enter` 会把恢复信息原子写入 `.imiocode/worktree-session.json`。普通启动只提示可恢复状态；
+只有从原仓库根目录显式执行 `java -jar ... --resume` 才恢复。`exit keep` 保留目录和分支；
+`exit remove` 与 `remove` 必须确认，且安全检查失败时拒绝删除。dirty、未跟踪文件或独有提交
+默认都会保留。ImioCode 不负责 Worktree 之间的 merge 或同步。
+
+创建 Worktree 后会按 `worktrees:` 配置复制本地配置和被忽略的必要文件、设置仓库 hooks，
+并尽力软链接依赖目录；平台不支持软链接时会显示警告但不会破坏 Worktree。子 Agent 使用
+`isolation: worktree` 时会获得唯一目录、分支、工作区工具和上下文通知；clean 结果自动清理，
+dirty 或有独有提交的结果会保留路径与分支供用户决定合并或丢弃。
 
 基于 Java 21 的终端 AI 编程助手，支持多轮 Agent Loop、内置文件/命令工具、权限系统和 MCP 外部工具。
 

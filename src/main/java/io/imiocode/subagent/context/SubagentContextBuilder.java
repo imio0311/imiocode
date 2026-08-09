@@ -8,6 +8,8 @@ import io.imiocode.subagent.runtime.SubagentRunMode;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import io.imiocode.worktree.model.WorktreeSession;
 
 /** 构造 Fork 上下文；完整历史保持字节顺序不变以复用 Prompt Cache。 */
 public final class SubagentContextBuilder {
@@ -33,6 +35,11 @@ public final class SubagentContextBuilder {
 
     public List<SystemReminder> reminders(AgentDefinition definition) {
         return List.of();
+    }
+
+    public List<SystemReminder> reminders(AgentDefinition definition, Optional<WorktreeSession> worktree) {
+        return worktree.<List<SystemReminder>>map(value -> List.of(WorktreeIsolationNotice.format(value)))
+                .orElseGet(() -> reminders(definition));
     }
 
     public ChatMessage taskMessage(String task) {

@@ -25,6 +25,7 @@ record ConfigDocument(
         SessionsDocument sessions,
         MemoryDocument memory,
         SkillsDocument skills,
+        WorktreesDocument worktrees,
         SubagentsDocument subagents,
         McpConfigDocument mcp,
         PermissionConfigDocument permissions,
@@ -42,8 +43,10 @@ record ConfigDocument(
 
     static ConfigDocument empty() {
         return new ConfigDocument(
-                null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, Map.of());
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -69,6 +72,7 @@ record ConfigDocument(
                 + ", sessions=" + sessions
                 + ", memory=" + memory
                 + ", skills=" + (skills == null ? "default" : "configured")
+                + ", worktrees=" + (worktrees == null ? "default" : "configured")
                 + ", mcp=" + (mcp == null ? "absent" : "configured")
                 + ", permissions=" + (permissions == null ? "absent" : "configured")
                 + ", hooks=" + hooks.size()
@@ -121,6 +125,16 @@ record ConfigDocument(
     }
 
     record SkillsDocument(InstallDocument install) {
+    }
+
+    record WorktreesDocument(
+            String directory,
+            @JsonProperty("git-timeout-seconds") Integer gitTimeoutSeconds,
+            @JsonProperty("stale-after-hours") Integer staleAfterHours,
+            @JsonProperty("cleanup-interval-seconds") Integer cleanupIntervalSeconds,
+            @JsonProperty("link-directories") List<String> linkDirectories,
+            @JsonProperty("copy-includes") List<String> copyIncludes,
+            @JsonProperty("copy-local-config") Boolean copyLocalConfig) {
     }
 
     record SubagentsDocument(

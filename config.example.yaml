@@ -16,6 +16,16 @@ agent:
   timeout-seconds: 600
   max-parallel-tools: 4
 
+# CH14 Git Worktree。所有目录都限制在当前仓库的 .imiocode 受管空间。
+worktrees:
+  directory: .imiocode/worktrees
+  git-timeout-seconds: 10
+  stale-after-hours: 168
+  cleanup-interval-seconds: 3600
+  copy-local-config: true
+  link-directories: [node_modules, .venv, venv, vendor]
+  copy-includes: []
+
 # CH13 子 Agent。haiku 是逻辑别名；未配置时会回退当前父模型并显示警告。
 subagents:
   model-aliases:

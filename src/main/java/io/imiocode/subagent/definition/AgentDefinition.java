@@ -79,6 +79,12 @@ public record AgentDefinition(
                 memory, isolation, source, sourcePath);
     }
 
+    public AgentDefinition withIsolation(AgentIsolation nextIsolation) {
+        return new AgentDefinition(name, description, prompt, model, permissionMode, maxTurns, timeout,
+                tools, disallowedTools, backgroundAllowed, initialPrompt, skills, mcpServers, hooks,
+                memory, Objects.requireNonNull(nextIsolation), source, sourcePath);
+    }
+
     private static String require(String value, String label) {
         if (value == null || value.isBlank()) throw new AgentDefinitionException(label + "不能为空");
         return value.trim();

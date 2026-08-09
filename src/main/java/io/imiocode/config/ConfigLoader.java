@@ -9,6 +9,7 @@ import io.imiocode.skill.install.SkillInstallConfig;
 import io.imiocode.hook.config.HookConfigLoadResult;
 import io.imiocode.hook.config.HookConfigMapper;
 import io.imiocode.subagent.config.SubagentConfig;
+import io.imiocode.worktree.config.WorktreeConfig;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -80,6 +81,12 @@ public final class ConfigLoader {
         return buildAppConfig(document, environment, ignored -> { });
     }
 
+    /** 启动主运行时前只读取 Worktree 配置，不要求 Provider/API Key 已就绪。 */
+    public WorktreeConfig loadWorktrees(Path workingDirectory) {
+        Objects.requireNonNull(workingDirectory, "workingDirectory");
+        return buildWorktreeConfig(yamlConfigLoader.load(workingDirectory.toAbsolutePath().normalize()).worktrees());
+    }
+
     /** 一次读取根配置并装配应用、MCP、权限及共享脱敏器。 */
     public RuntimeConfig loadAll(
             Path workspace,
@@ -144,6 +151,7 @@ public final class ConfigLoader {
                 mcp,
                 permissions,
                 buildSkillInstallConfig(document.skills()),
+                buildWorktreeConfig(document.worktrees()),
                 buildSubagentConfig(document.subagents()),
                 hooks,
                 redactor,
@@ -422,6 +430,27 @@ public final class ConfigLoader {
                     document.notificationCapacity() == null ? defaults.notificationCapacity() : document.notificationCapacity());
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("config.yaml 配置项 subagents 无效: " + exception.getMessage(), exception);
+        }
+    }
+
+    private static WorktreeConfig buildWorktreeConfig(ConfigDocument.WorktreesDocument document) {
+        WorktreeConfig defaults = WorktreeConfig.defaults();
+        if (document == null) return defaults;
+        try {
+            return new WorktreeConfig(
+                    document.directory() == null || document.directory().isBlank()
+                            ? defaults.directory() : Path.of(document.directory().trim()),
+                    Duration.ofSeconds(document.gitTimeoutSeconds() == null
+                            ? defaults.gitTimeout().toSeconds() : document.gitTimeoutSeconds()),
+                    Duration.ofHours(document.staleAfterHours() == null
+                            ? defaults.staleAfter().toHours() : document.staleAfterHours()),
+                    Duration.ofSeconds(document.cleanupIntervalSeconds() == null
+                            ? defaults.cleanupInterval().toSeconds() : document.cleanupIntervalSeconds()),
+                    document.linkDirectories() == null ? defaults.linkDirectories() : document.linkDirectories(),
+                    document.copyIncludes() == null ? defaults.copyIncludes() : document.copyIncludes(),
+                    document.copyLocalConfig() == null ? defaults.copyLocalConfig() : document.copyLocalConfig());
+        } catch (RuntimeException exception) {
+            throw new ConfigException("config.yaml 配置项 worktrees 无效: " + exception.getMessage(), exception);
         }
     }
 

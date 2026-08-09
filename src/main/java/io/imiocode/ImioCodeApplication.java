@@ -16,6 +16,7 @@ import io.imiocode.command.builtin.SessionCommand;
 import io.imiocode.command.builtin.StatusCommand;
 import io.imiocode.command.builtin.VerbosityCommand;
 import io.imiocode.command.builtin.TaskCommand;
+import io.imiocode.command.builtin.WorktreeCommand;
 import io.imiocode.config.AppConfig;
 import io.imiocode.config.ConfigException;
 import io.imiocode.config.ConfigLoader;
@@ -94,6 +95,7 @@ import io.imiocode.session.SessionManager;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolLimits;
 import io.imiocode.tool.ToolRegistry;
+import io.imiocode.tool.ToolSelection;
 import io.imiocode.tool.core.BashTool;
 import io.imiocode.tool.core.EditFileTool;
 import io.imiocode.tool.core.GlobTool;
@@ -121,14 +123,24 @@ import io.imiocode.skill.install.SkillInstallStage;
 import io.imiocode.skill.install.SkillInstaller;
 import io.imiocode.subagent.context.SubagentContextBuilder;
 import io.imiocode.subagent.definition.AgentDefinitionLoader;
+import io.imiocode.subagent.definition.AgentDefinition;
 import io.imiocode.subagent.filter.SubagentToolFilter;
 import io.imiocode.subagent.model.ModelAliasResolver;
 import io.imiocode.subagent.runtime.AgentTool;
 import io.imiocode.subagent.runtime.RunToCompletion;
 import io.imiocode.subagent.runtime.SubagentAgentHandle;
+import io.imiocode.subagent.runtime.SubagentAgentFactory;
 import io.imiocode.subagent.runtime.SubagentDispatcher;
+import io.imiocode.subagent.runtime.SubagentToolRegistryFactory;
 import io.imiocode.subagent.task.TaskManager;
 import io.imiocode.subagent.trace.TraceRegistry;
+import io.imiocode.worktree.WorktreeException;
+import io.imiocode.worktree.git.GitCommandRunner;
+import io.imiocode.worktree.lifecycle.WorktreeManager;
+import io.imiocode.worktree.runtime.LaunchOptions;
+import io.imiocode.worktree.runtime.WorkspaceTransition;
+import io.imiocode.worktree.runtime.WorkspaceTransitionController;
+import io.imiocode.worktree.runtime.WorktreeBootstrap;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -143,13 +155,51 @@ public final class ImioCodeApplication {
     }
 
     public static void main(String[] args) {
-        int exitCode = run();
+        int exitCode = run(args);
         if (exitCode != 0) {
             System.exit(exitCode);
         }
     }
 
     static int run() {
+        return run(new String[0]);
+    }
+
+    static int run(String[] args) {
+        WorktreeManager worktrees = null;
+        try {
+            LaunchOptions options = LaunchOptions.parse(args);
+            Path launchDirectory = Path.of("").toAbsolutePath().normalize();
+            Path repositoryRoot = discoverRepositoryRoot(launchDirectory);
+            if (repositoryRoot != null) {
+                var worktreeConfig = new ConfigLoader().loadWorktrees(repositoryRoot);
+                worktrees = new WorktreeManager(repositoryRoot, worktreeConfig);
+            }
+            var startup = new WorktreeBootstrap().resolve(launchDirectory, options, worktrees);
+            Path workspace = startup.workspace();
+            boolean showPendingResume = startup.pendingResumeNotice();
+            while (true) {
+                WorkspaceTransitionController transitions = new WorkspaceTransitionController();
+                int exitCode = runWorkspace(workspace, worktrees, transitions, showPendingResume);
+                if (exitCode != 0) return exitCode;
+                WorkspaceTransition transition = transitions.current();
+                if (transition instanceof WorkspaceTransition.Stay) return 0;
+                if (transition instanceof WorkspaceTransition.Enter enter) workspace = enter.path();
+                else if (transition instanceof WorkspaceTransition.Exit exit) workspace = exit.path();
+                showPendingResume = false;
+            }
+        } catch (ConfigException exception) {
+            System.err.println("[配置错误] " + exception.getMessage()); return 2;
+        } catch (WorktreeException exception) {
+            System.err.println("[Worktree错误] " + exception.getMessage()); return 2;
+        } finally {
+            if (worktrees != null) worktrees.close();
+        }
+    }
+
+    private static int runWorkspace(Path workspace, WorktreeManager worktreeManager,
+                                    WorkspaceTransitionController transitions,
+                                    boolean showPendingResume) {
         LlmClient client = null;
         ConversationSession session = null;
         ConversationCoordinator coordinator = null;
@@ -160,7 +210,7 @@ public final class ImioCodeApplication {
         HookContextFactory hookContexts = null;
         TaskManager taskManager = null;
         try {
-            Path workspace = Path.of("").toAbsolutePath().normalize();
+            workspace = workspace.toAbsolutePath().normalize();
             Path userHome = Path.of(System.getProperty("user.home")).toAbsolutePath().normalize();
             RuntimeConfig runtimeConfig = new ConfigLoader().loadAll(
                     workspace, userHome, System.getenv());
@@ -169,6 +219,7 @@ public final class ImioCodeApplication {
             SecretRedactor redactor = runtimeConfig.redactor();
             CommandRegistry commandRegistry = createCommandRegistry();
             commandRegistry.register(new SkillManagementCommand());
+            if (worktreeManager != null) commandRegistry.register(new WorktreeCommand(worktreeManager, transitions));
             commandRegistry.unregister("review");
             terminal = new JLineTerminalUi(redactor, config.ui().verbosity(), commandRegistry::complete);
             String version = VersionResolver.resolve();
@@ -178,6 +229,9 @@ public final class ImioCodeApplication {
                     config.provider().configValue(),
                     config.model(),
                     workspace));
+            if (showPendingResume) {
+                terminal.printInfo("[Worktree] 检测到可恢复会话；使用 --resume 显式恢复");
+            }
             for (ConfigNotice notice : runtimeConfig.notices()) {
                 terminal.printInfo(notice.safeMessage());
             }
@@ -296,35 +350,24 @@ public final class ImioCodeApplication {
             SubagentToolFilter subagentToolFilter = new SubagentToolFilter(runtimeConfig.subagents());
             ModelAliasResolver modelAliases = new ModelAliasResolver(runtimeConfig.subagents());
             AtomicReference<ConversationSession> parentSession = new AtomicReference<>();
+            SubagentToolRegistryFactory scopedTools = new SubagentToolRegistryFactory(registry, limits, redactor);
+            Path activeWorkspace = workspace;
+            SubagentAgentFactory childAgents = new SubagentAgentFactory() {
+                @Override public SubagentAgentHandle create(AgentDefinition definition, ToolSelection selection) {
+                    return createSubagentHandle(definition, selection, activeWorkspace, scopedTools,
+                            config, modelAliases, permissionSettings, redactor,
+                            configuredHooks, configuredHookContexts);
+                }
+                @Override public SubagentAgentHandle create(AgentDefinition definition, ToolSelection selection,
+                                                             Path workdir) {
+                    return createSubagentHandle(definition, selection, workdir, scopedTools,
+                            config, modelAliases, permissionSettings, redactor,
+                            configuredHooks, configuredHookContexts);
+                }
+            };
             RunToCompletion subagentRunner = new RunToCompletion(
                     registry, subagentToolFilter, new SubagentContextBuilder(),
-                    (definition, selection) -> {
-                        var resolution = modelAliases.resolve(definition, config.model());
-                        AppConfig childConfig = config.withModel(resolution.model());
-                        PromptAssembler childPrompts = new PromptAssembler(SystemPromptBuilder.defaults(), registry);
-                        LlmClient childClient = new LlmClientFactory().create(childConfig, childPrompts);
-                        PermissionSettings childSettings = new PermissionSettings(
-                                definition.permissionMode(), permissionSettings.userRules(),
-                                permissionSettings.projectRules(), permissionSettings.localRules());
-                        PermissionChecker childChecker = new PermissionChecker(
-                                workspace, new RegexDangerousCommandDetector(), sandbox,
-                                new PermissionRuleEngine(), new PermissionModePolicy(), childSettings,
-                                safeCommandDetector);
-                        PermissionGate childGate = new PermissionGate(
-                                new PermissionRequestFactory(redactor, commandRiskClassifier),
-                                childChecker, new PermissionCoordinator());
-                        ContextManager childContext = new ContextManager(
-                                childConfig.context(), childConfig.maxOutputTokens(), childPrompts,
-                                new ApproximateTokenEstimator(), offloaderFor(workspace, redactor),
-                                new ConversationSummarizer(childClient, new ConversationSerializer(), new SummaryParser()));
-                        Agent childAgent = new Agent(childClient, registry,
-                                new io.imiocode.config.AgentConfig(definition.maxTurns(), definition.timeout(),
-                                        config.agent().maxParallelTools()),
-                                childConfig.maxOutputTokens(), environmentCollectorFor(workspace, config.model()),
-                                new EnvironmentReminderFormatter(), childGate, childContext, null,
-                                true, configuredHooks, configuredHookContexts);
-                        return new SubagentAgentHandle(childAgent, resolution.model(), resolution.warning());
-                    }, traceRegistry, mainTraceId);
+                    childAgents, traceRegistry, mainTraceId, worktreeManager);
             taskManager = new TaskManager(subagentRunner,
                     runtimeConfig.subagents().maxBackgroundTasks(),
                     runtimeConfig.subagents().maxTaskRecords(),
@@ -449,6 +492,7 @@ public final class ImioCodeApplication {
             System.err.println("[运行错误] ImioCode 无法继续运行");
             return 1;
         } finally {
+            if (taskManager != null) taskManager.close();
             if (coordinator != null) {
                 coordinator.close();
             } else if (session != null) {
@@ -462,7 +506,6 @@ public final class ImioCodeApplication {
             if (coordinator == null && remoteSkillInstaller != null) {
                 remoteSkillInstaller.close();
             }
-            if (taskManager != null) taskManager.close();
             if (hookContexts != null) {
                 try {
                     hookRuntime.runHooks(hookContexts.builder(HookEvent.SHUTDOWN).build());
@@ -480,8 +523,65 @@ public final class ImioCodeApplication {
         }
     }
 
+    private static SubagentAgentHandle createSubagentHandle(
+            AgentDefinition definition,
+            ToolSelection selection,
+            Path workdir,
+            SubagentToolRegistryFactory scopedTools,
+            AppConfig config,
+            ModelAliasResolver modelAliases,
+            PermissionSettings parentPermissions,
+            SecretRedactor redactor,
+            HookRuntime hooks,
+            HookContextFactory ignoredParentHookContexts) {
+        Path childWorkspace = workdir.toAbsolutePath().normalize();
+        HookContextFactory childHookContexts = new HookContextFactory(childWorkspace);
+        HookToolLifecycleListener childLifecycle = new HookToolLifecycleListener(hooks, childHookContexts);
+        ToolRegistry childRegistry = scopedTools.create(childWorkspace, childLifecycle);
+        var resolution = modelAliases.resolve(definition, config.model());
+        AppConfig childConfig = config.withModel(resolution.model());
+        PromptAssembler childPrompts = new PromptAssembler(SystemPromptBuilder.defaults(), childRegistry);
+        LlmClient childClient = new LlmClientFactory().create(childConfig, childPrompts);
+        WorkspacePolicy childPolicy = new WorkspacePolicy(childWorkspace);
+        WorkspacePathSandbox childSandbox = new WorkspacePathSandbox(childPolicy);
+        ShellCommandScanner childScanner = new ShellCommandScanner();
+        ShellCommandTokenizer childTokenizer = new ShellCommandTokenizer();
+        StrictSafeCommandDetector childSafe = new StrictSafeCommandDetector(
+                childWorkspace, childScanner, childTokenizer);
+        RegexCommandRiskClassifier childRisk = new RegexCommandRiskClassifier(
+                childSafe, childScanner, childTokenizer);
+        PermissionSettings childSettings = new PermissionSettings(
+                definition.permissionMode(), parentPermissions.userRules(),
+                parentPermissions.projectRules(), parentPermissions.localRules());
+        PermissionChecker childChecker = new PermissionChecker(
+                childWorkspace, new RegexDangerousCommandDetector(), childSandbox,
+                new PermissionRuleEngine(), new PermissionModePolicy(), childSettings, childSafe);
+        PermissionGate childGate = new PermissionGate(
+                new PermissionRequestFactory(redactor, childRisk), childChecker,
+                new PermissionCoordinator());
+        ContextManager childContext = new ContextManager(
+                childConfig.context(), childConfig.maxOutputTokens(), childPrompts,
+                new ApproximateTokenEstimator(), offloaderFor(childWorkspace, redactor),
+                new ConversationSummarizer(childClient, new ConversationSerializer(), new SummaryParser()));
+        Agent childAgent = new Agent(childClient, childRegistry,
+                new io.imiocode.config.AgentConfig(definition.maxTurns(), definition.timeout(),
+                        config.agent().maxParallelTools()),
+                childConfig.maxOutputTokens(), environmentCollectorFor(childWorkspace, resolution.model()),
+                new EnvironmentReminderFormatter(), childGate, childContext, null,
+                true, hooks, childHookContexts);
+        return new SubagentAgentHandle(childAgent, resolution.model(), resolution.warning());
+    }
+
     private static ToolResultOffloader offloaderFor(Path workspace, SecretRedactor redactor) {
         return new ToolResultOffloader(new ToolResultSpillStore(workspace, redactor), redactor);
+    }
+
+    private static Path discoverRepositoryRoot(Path directory) {
+        var result = new GitCommandRunner(Duration.ofSeconds(10)).run(
+                directory, List.of("rev-parse", "--show-toplevel"));
+        if (!result.success() || result.output().isBlank()) return null;
+        try { return Path.of(result.output().strip()).toAbsolutePath().normalize(); }
+        catch (RuntimeException exception) { return null; }
     }
 
     private static EnvironmentContextCollector environmentCollectorFor(Path workspace, String model) {

@@ -25,7 +25,10 @@ public final class AgentTool extends BaseTool {
         properties.putObject("description").put("type","string").put("description","供任务列表显示的简短描述");
         properties.putObject("prompt").put("type","string").put("description","交给子 Agent 的完整任务 Prompt");
         properties.putObject("run_in_background").put("type","boolean").put("description","是否后台执行");
-        properties.putObject("isolation").put("type","string").put("description","本章仅支持 none");
+        ObjectNode isolation = properties.putObject("isolation");
+        isolation.put("type", "string");
+        isolation.putArray("enum").add("none").add("worktree");
+        isolation.put("description", "可选隔离模式；省略时继承 Agent 定义");
         properties.putObject("model").put("type","string").put("description","可选模型名或 config.yaml 中的逻辑别名，优先级高于 Agent 定义");
         properties.putObject("cwd").put("type","string").put("description","可选工作子目录，必须位于当前工作区内");
         ObjectNode denied=properties.putObject("disallowed_tools"); denied.put("type","array"); denied.putObject("items").put("type","string");
@@ -40,7 +43,7 @@ public final class AgentTool extends BaseTool {
         String type=arguments.path("subagent_type").asText(""); String description=requireText(arguments,"description");
         String prompt=requireText(arguments,"prompt");
         boolean background=arguments.path("run_in_background").asBoolean(false);
-        String isolation=arguments.path("isolation").asText("none");
+        String isolation=arguments.path("isolation").asText("");
         String model=arguments.path("model").asText("");
         String cwd=arguments.path("cwd").asText(".");
         java.util.LinkedHashSet<String> deniedTools=new java.util.LinkedHashSet<>();

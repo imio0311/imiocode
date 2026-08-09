@@ -4,5 +4,6 @@ package io.imiocode.command;
 public enum CommandOutcome {
     HANDLED,
     FORWARD_TO_AGENT,
+    RESTART_REQUESTED,
     EXIT_REQUESTED
 }

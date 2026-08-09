@@ -7,3 +7,6 @@
 /.imiocode/tool-results/
 /.imiocode/sessions/
 /.imiocode/memories.md
+/.imiocode/worktrees/
+/.imiocode/worktree-locks/
+/.imiocode/worktree-session.json

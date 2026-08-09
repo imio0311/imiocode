@@ -42,4 +42,8 @@ public record CommandResult(
     public static CommandResult exit() {
         return new CommandResult(CommandOutcome.EXIT_REQUESTED, List.of(), Optional.empty());
     }
+
+    public static CommandResult restart(CommandMessage... messages) {
+        return new CommandResult(CommandOutcome.RESTART_REQUESTED, List.of(messages), Optional.empty());
+    }
 }

@@ -6,6 +6,7 @@ import io.imiocode.tool.SecretRedactor;
 import io.imiocode.skill.install.SkillInstallConfig;
 import io.imiocode.hook.config.HookConfigLoadResult;
 import io.imiocode.subagent.config.SubagentConfig;
+import io.imiocode.worktree.config.WorktreeConfig;
 
 import java.util.List;
 import java.util.Objects;
@@ -16,6 +17,7 @@ public record RuntimeConfig(
         McpConfigLoadResult mcp,
         PermissionSettings permissions,
         SkillInstallConfig skillInstall,
+        WorktreeConfig worktrees,
         SubagentConfig subagents,
         HookConfigLoadResult hooks,
         SecretRedactor redactor,
@@ -27,6 +29,7 @@ public record RuntimeConfig(
         Objects.requireNonNull(mcp, "mcp");
         Objects.requireNonNull(permissions, "permissions");
         Objects.requireNonNull(skillInstall, "skillInstall");
+        Objects.requireNonNull(worktrees, "worktrees");
         Objects.requireNonNull(subagents, "subagents");
         Objects.requireNonNull(hooks, "hooks");
         Objects.requireNonNull(redactor, "redactor");
@@ -41,6 +44,7 @@ public record RuntimeConfig(
                 + ", mcpErrors=" + mcp.errors().size()
                 + ", permissionsMode=" + permissions.mode()
                 + ", skillInstallHosts=" + skillInstall.allowedHosts().size()
+                + ", worktreeDirectory=" + worktrees.directory()
                 + ", subagentAliases=" + subagents.modelAliases().size()
                 + ", hooks=" + hooks.hooks().size()
                 + ", hookErrors=" + hooks.errors().size()
