@@ -249,7 +249,10 @@ public final class Agent implements AutoCloseable {
 
         TaskModeSnapshot taskModeSnapshot = consumeTaskModeSnapshot();
         AgentMode taskMode = taskModeSnapshot.mode();
-        ToolSelection baseSelection = PlanModePrompt.toolSelection(taskMode);
+        ToolSelection modeSelection = PlanModePrompt.toolSelection(taskMode);
+        ToolSelection baseSelection = request.toolSelection()
+                .map(selection -> modeSelection.intersect(selection, registry.enabledNames()))
+                .orElse(modeSelection);
         List<SystemReminder> sessionReminders = List.copyOf(request.reminders());
         ManagedConversationState conversation = new ManagedConversationState(
                 request.committedHistory(), request.userMessage());
@@ -322,11 +325,16 @@ public final class Agent implements AutoCloseable {
                 boolean contextRecovered = false;
                 while (true) {
                     try {
-                        turn = turnExecutor.execute(
-                                new ChatRequest(conversation.workingMessages(), reminders, selection,
-                                        OptionalInt.of(initialOutputTokenLimit)),
-                                iteration, iteration < config.maxIterations(), context,
-                                unknownTools, checkedListener);
+                        AgentHistoryContext.set(conversation.workingMessages());
+                        try {
+                            turn = turnExecutor.execute(
+                                    new ChatRequest(conversation.workingMessages(), reminders, selection,
+                                            OptionalInt.of(initialOutputTokenLimit)),
+                                    iteration, iteration < config.maxIterations(), context,
+                                    unknownTools, checkedListener);
+                        } finally {
+                            AgentHistoryContext.clear();
+                        }
                         break;
                     } catch (LlmException exception) {
                         if (exception.type() != LlmErrorType.CONTEXT_LIMIT || contextRecovered

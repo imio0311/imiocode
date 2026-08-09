@@ -12,6 +12,8 @@ import io.imiocode.terminal.TerminalUi;
 import io.imiocode.terminal.UiState;
 import io.imiocode.tool.ToolExecutionEvent;
 import io.imiocode.tool.ToolExecutionState;
+import io.imiocode.subagent.task.TaskManager;
+import io.imiocode.subagent.task.TaskNotification;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -21,20 +23,28 @@ public final class ConversationLoop {
     private final ConversationCoordinator coordinator;
     private final TerminalUi terminal;
     private final CommandRegistry commands;
+    private final TaskManager tasks;
     private final AtomicBoolean stopping = new AtomicBoolean();
 
     public ConversationLoop(ConversationCoordinator coordinator, TerminalUi terminal, CommandRegistry commands) {
+        this(coordinator, terminal, commands, null);
+    }
+
+    public ConversationLoop(ConversationCoordinator coordinator, TerminalUi terminal,
+                            CommandRegistry commands, TaskManager tasks) {
         this.coordinator = Objects.requireNonNull(coordinator);
         this.terminal = Objects.requireNonNull(terminal);
         this.commands = Objects.requireNonNull(commands);
+        this.tasks = tasks;
     }
 
     public void run() {
-        terminal.setInterruptHandler(this::requestStop);
+        terminal.setInterruptHandler(this::handleInterrupt);
         CommandContext commandContext = new CommandContext(coordinator, terminal, commands);
         terminal.refreshStatus(coordinator.status());
         while (!stopping.get()) {
             drainHookNotifications();
+            drainTaskNotifications();
             String input = terminal.readLine("You> ");
             if (input == null || stopping.get()) break;
             if (input.trim().isEmpty()) continue;
@@ -53,6 +63,7 @@ public final class ConversationLoop {
                     terminal.refreshStatus(coordinator.status());
                 }
                 drainHookNotifications();
+                drainTaskNotifications();
                 continue;
             }
             runAgent(input);
@@ -79,6 +90,7 @@ public final class ConversationLoop {
             terminal.printError("对话处理发生未知错误，本轮响应未完成");
         } finally {
             drainHookNotifications();
+            drainTaskNotifications();
             if (!stopping.get()) terminal.refreshStatus(coordinator.status());
         }
     }
@@ -87,10 +99,30 @@ public final class ConversationLoop {
         coordinator.drainHookNotifications().forEach(terminal::showHookNotification);
     }
 
+    private void drainTaskNotifications() {
+        if (tasks == null) return;
+        for (TaskNotification notification : tasks.drainNotifications()) {
+            String text = "[任务/" + notification.taskId() + "] "
+                    + notification.status().name().toLowerCase() + " · " + notification.summary();
+            terminal.printInfo(text);
+            coordinator.addSystemReminder("后台子 Agent 任务已结束：" + text
+                    + "。结合此结果继续回答用户；不要重复声明这条通知。");
+        }
+    }
+
     public void requestStop() {
         if (stopping.compareAndSet(false, true)) {
             coordinator.cancelActive(); coordinator.close();
         }
+    }
+
+    private void handleInterrupt() {
+        if (coordinator.isActive()) {
+            coordinator.cancelActive();
+            terminal.printInfo("[Agent] 已中断前台等待；正在运行的子 Agent 会转入任务表，可用 /tasks 查看");
+            return;
+        }
+        requestStop();
     }
 
     private final class UiConversationListener implements ConversationListener {

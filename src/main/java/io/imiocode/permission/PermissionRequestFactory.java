@@ -24,6 +24,7 @@ public final class PermissionRequestFactory {
             "write_file", PermissionOperation.WRITE,
             "edit_file", PermissionOperation.WRITE,
             "load_skill", PermissionOperation.READ,
+            "agent", PermissionOperation.READ,
             "bash", PermissionOperation.COMMAND);
 
     private final SecretRedactor redactor;
@@ -57,6 +58,7 @@ public final class PermissionRequestFactory {
             case "glob" -> requireText(arguments, "pattern");
             case "grep" -> optionalText(arguments, "path", ".");
             case "load_skill" -> ".";
+            case "agent" -> ".";
             default -> requireText(arguments, "path");
         };
         String normalized = operation == PermissionOperation.COMMAND

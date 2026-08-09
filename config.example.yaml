@@ -16,6 +16,16 @@ agent:
   timeout-seconds: 600
   max-parallel-tools: 4
 
+# CH13 子 Agent。haiku 是逻辑别名；未配置时会回退当前父模型并显示警告。
+subagents:
+  model-aliases:
+    # haiku: claude-3-5-haiku-latest
+  globally-denied-tools: [agent, install_skill]
+  background-allowed-tools: [read_file, glob, grep]
+  max-background-tasks: 4
+  max-task-records: 128
+  notification-capacity: 128
+
 providers:
   openai:
     api-key: ${OPENAI_API_KEY}

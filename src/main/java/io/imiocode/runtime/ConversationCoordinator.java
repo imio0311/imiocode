@@ -83,6 +83,10 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     private volatile long synchronizedSkillGeneration = -1;
     private SessionSnapshot current;
 
+    public void addSystemReminder(String content) {
+        core.addSystemReminder(content);
+    }
+
     public ConversationCoordinator(
             ConversationSession core,
             SessionManager sessions,

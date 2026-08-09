@@ -1,6 +1,7 @@
 package io.imiocode;
 
 import io.imiocode.agent.Agent;
+import io.imiocode.agent.AgentHistoryContext;
 import io.imiocode.command.CommandRegistry;
 import io.imiocode.command.builtin.ClearCommand;
 import io.imiocode.command.builtin.CompactCommand;
@@ -14,6 +15,7 @@ import io.imiocode.command.builtin.ReviewCommand;
 import io.imiocode.command.builtin.SessionCommand;
 import io.imiocode.command.builtin.StatusCommand;
 import io.imiocode.command.builtin.VerbosityCommand;
+import io.imiocode.command.builtin.TaskCommand;
 import io.imiocode.config.AppConfig;
 import io.imiocode.config.ConfigException;
 import io.imiocode.config.ConfigLoader;
@@ -117,12 +119,24 @@ import io.imiocode.skill.install.RemoteSkillLocator;
 import io.imiocode.skill.install.SkillInstallListener;
 import io.imiocode.skill.install.SkillInstallStage;
 import io.imiocode.skill.install.SkillInstaller;
+import io.imiocode.subagent.context.SubagentContextBuilder;
+import io.imiocode.subagent.definition.AgentDefinitionLoader;
+import io.imiocode.subagent.filter.SubagentToolFilter;
+import io.imiocode.subagent.model.ModelAliasResolver;
+import io.imiocode.subagent.runtime.AgentTool;
+import io.imiocode.subagent.runtime.RunToCompletion;
+import io.imiocode.subagent.runtime.SubagentAgentHandle;
+import io.imiocode.subagent.runtime.SubagentDispatcher;
+import io.imiocode.subagent.task.TaskManager;
+import io.imiocode.subagent.trace.TraceRegistry;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Files;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class ImioCodeApplication {
     private ImioCodeApplication() {
@@ -144,6 +158,7 @@ public final class ImioCodeApplication {
         SkillInstaller remoteSkillInstaller = null;
         HookRuntime hookRuntime = HookRuntime.NOOP;
         HookContextFactory hookContexts = null;
+        TaskManager taskManager = null;
         try {
             Path workspace = Path.of("").toAbsolutePath().normalize();
             Path userHome = Path.of(System.getProperty("user.home")).toAbsolutePath().normalize();
@@ -272,6 +287,57 @@ public final class ImioCodeApplication {
                         + " 个 Server，注册 " + mcpStartup.registeredTools() + " 个工具");
             }
 
+            AgentDefinitionLoader agentDefinitions = new AgentDefinitionLoader(workspace, userHome);
+            for (String diagnostic : agentDefinitions.snapshot().diagnostics()) {
+                terminal.printError("[Agent] " + diagnostic);
+            }
+            TraceRegistry traceRegistry = new TraceRegistry();
+            String mainTraceId = traceRegistry.start("main", null, config.model(), false);
+            SubagentToolFilter subagentToolFilter = new SubagentToolFilter(runtimeConfig.subagents());
+            ModelAliasResolver modelAliases = new ModelAliasResolver(runtimeConfig.subagents());
+            AtomicReference<ConversationSession> parentSession = new AtomicReference<>();
+            RunToCompletion subagentRunner = new RunToCompletion(
+                    registry, subagentToolFilter, new SubagentContextBuilder(),
+                    (definition, selection) -> {
+                        var resolution = modelAliases.resolve(definition, config.model());
+                        AppConfig childConfig = config.withModel(resolution.model());
+                        PromptAssembler childPrompts = new PromptAssembler(SystemPromptBuilder.defaults(), registry);
+                        LlmClient childClient = new LlmClientFactory().create(childConfig, childPrompts);
+                        PermissionSettings childSettings = new PermissionSettings(
+                                definition.permissionMode(), permissionSettings.userRules(),
+                                permissionSettings.projectRules(), permissionSettings.localRules());
+                        PermissionChecker childChecker = new PermissionChecker(
+                                workspace, new RegexDangerousCommandDetector(), sandbox,
+                                new PermissionRuleEngine(), new PermissionModePolicy(), childSettings,
+                                safeCommandDetector);
+                        PermissionGate childGate = new PermissionGate(
+                                new PermissionRequestFactory(redactor, commandRiskClassifier),
+                                childChecker, new PermissionCoordinator());
+                        ContextManager childContext = new ContextManager(
+                                childConfig.context(), childConfig.maxOutputTokens(), childPrompts,
+                                new ApproximateTokenEstimator(), offloaderFor(workspace, redactor),
+                                new ConversationSummarizer(childClient, new ConversationSerializer(), new SummaryParser()));
+                        Agent childAgent = new Agent(childClient, registry,
+                                new io.imiocode.config.AgentConfig(definition.maxTurns(), definition.timeout(),
+                                        config.agent().maxParallelTools()),
+                                childConfig.maxOutputTokens(), environmentCollectorFor(workspace, config.model()),
+                                new EnvironmentReminderFormatter(), childGate, childContext, null,
+                                true, configuredHooks, configuredHookContexts);
+                        return new SubagentAgentHandle(childAgent, resolution.model(), resolution.warning());
+                    }, traceRegistry, mainTraceId);
+            taskManager = new TaskManager(subagentRunner,
+                    runtimeConfig.subagents().maxBackgroundTasks(),
+                    runtimeConfig.subagents().maxTaskRecords(),
+                    runtimeConfig.subagents().notificationCapacity());
+            TaskManager configuredTasks = taskManager;
+            commandRegistry.register(new TaskCommand(configuredTasks));
+            SubagentDispatcher subagentDispatcher = new SubagentDispatcher(
+                    agentDefinitions, subagentRunner, configuredTasks,
+                    () -> AgentHistoryContext.current().orElseGet(
+                            () -> parentSession.get() == null ? List.of() : parentSession.get().historySnapshot()),
+                    workspace);
+            registry.register(new AgentTool(subagentDispatcher, limits, redactor));
+
             PromptAssembler promptAssembler = new PromptAssembler(
                     SystemPromptBuilder.defaults(), registry);
             client = new LlmClientFactory().create(config, promptAssembler);
@@ -316,6 +382,7 @@ public final class ImioCodeApplication {
                     configuredHooks,
                     configuredHookContexts)));
             session = new ConversationSession(agent);
+            parentSession.set(session);
             MarkdownMemoryStore memoryStore = new MarkdownMemoryStore(userHome, workspace);
             MemoryManager memoryManager = new MemoryManager(
                     memoryStore,
@@ -370,7 +437,7 @@ public final class ImioCodeApplication {
             }
 
             terminal.printInfo("[会话] " + coordinator.currentSession().id());
-            new ConversationLoop(coordinator, terminal, commandRegistry).run();
+            new ConversationLoop(coordinator, terminal, commandRegistry, configuredTasks).run();
             return 0;
         } catch (ConfigException exception) {
             System.err.println("[配置错误] " + exception.getMessage());
@@ -395,6 +462,7 @@ public final class ImioCodeApplication {
             if (coordinator == null && remoteSkillInstaller != null) {
                 remoteSkillInstaller.close();
             }
+            if (taskManager != null) taskManager.close();
             if (hookContexts != null) {
                 try {
                     hookRuntime.runHooks(hookContexts.builder(HookEvent.SHUTDOWN).build());
@@ -410,6 +478,14 @@ public final class ImioCodeApplication {
                 terminal.close();
             }
         }
+    }
+
+    private static ToolResultOffloader offloaderFor(Path workspace, SecretRedactor redactor) {
+        return new ToolResultOffloader(new ToolResultSpillStore(workspace, redactor), redactor);
+    }
+
+    private static EnvironmentContextCollector environmentCollectorFor(Path workspace, String model) {
+        return new EnvironmentContextCollector(workspace, Clock.systemDefaultZone(), Duration.ofSeconds(2), model);
     }
 
     private static String formatMcpError(McpConfigError error) {

@@ -25,6 +25,7 @@ record ConfigDocument(
         SessionsDocument sessions,
         MemoryDocument memory,
         SkillsDocument skills,
+        SubagentsDocument subagents,
         McpConfigDocument mcp,
         PermissionConfigDocument permissions,
         List<HookDocument> hooks,
@@ -42,7 +43,7 @@ record ConfigDocument(
     static ConfigDocument empty() {
         return new ConfigDocument(
                 null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, Map.of());
+                null, null, null, null, null, null, null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -120,6 +121,15 @@ record ConfigDocument(
     }
 
     record SkillsDocument(InstallDocument install) {
+    }
+
+    record SubagentsDocument(
+            @JsonProperty("model-aliases") Map<String, String> modelAliases,
+            @JsonProperty("globally-denied-tools") java.util.Set<String> globallyDeniedTools,
+            @JsonProperty("background-allowed-tools") java.util.Set<String> backgroundAllowedTools,
+            @JsonProperty("max-background-tasks") Integer maxBackgroundTasks,
+            @JsonProperty("max-task-records") Integer maxTaskRecords,
+            @JsonProperty("notification-capacity") Integer notificationCapacity) {
     }
 
     record InstallDocument(

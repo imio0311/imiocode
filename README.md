@@ -1,5 +1,16 @@
 # ImioCode
 
+## 多 Agent 与后台任务（CH13）
+
+Agent 定义使用 YAML frontmatter + Markdown 正文，按“项目 `.imiocode/agents/` > 用户
+`~/.imiocode/agents/` > 内置 > 插件”加载。内置 `explore`、`plan`、`general-purpose`
+三个类型通过同一个 `agent` 工具调用。`explore` 和 `plan` 始终只读；后台任务默认只允许
+`read_file`、`glob`、`grep`，需要确认的操作会自动拒绝，不会挂起。
+
+后台任务命令：`/tasks`、`/task info <id>`、`/task cancel <id>`。模型别名、全局禁用工具、
+后台白名单和容量配置统一位于 `config.yaml` 的 `subagents:` 区域。`haiku` 未映射时会回退
+父模型并显示警告。本章只支持 `isolation: none`，请求 `worktree` 会被明确拒绝。
+
 基于 Java 21 的终端 AI 编程助手，支持多轮 Agent Loop、内置文件/命令工具、权限系统和 MCP 外部工具。
 
 ## 构建与启动

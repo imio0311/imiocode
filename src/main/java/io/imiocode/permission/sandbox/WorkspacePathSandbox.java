@@ -30,6 +30,9 @@ public final class WorkspacePathSandbox implements PathSandbox {
                 case "write_file" -> policy.resolveWritableFile(target);
                 case "install_skill" -> policy.resolveWritableFile(target);
                 case "grep" -> policy.resolveExistingPath(target);
+                case "agent", "load_skill" -> {
+                    // 调度与 Skill 加载本身没有调用方文件路径；内部真实工具仍逐次经过沙箱。
+                }
                 case "glob" -> {
                     // Glob 始终遍历工作区；这里只验证 pattern 本身不能表达越界根。
                 }

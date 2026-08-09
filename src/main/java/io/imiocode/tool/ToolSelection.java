@@ -32,4 +32,24 @@ public record ToolSelection(boolean unrestricted, Set<String> allowedNames) {
     public boolean allows(String name) {
         return name != null && (unrestricted || allowedNames.contains(name));
     }
+
+    /** 多层策略求交集；用于子 Agent 在父级能力之上继续收窄权限。 */
+    public ToolSelection intersect(ToolSelection other, Set<String> availableNames) {
+        Objects.requireNonNull(other, "other");
+        Objects.requireNonNull(availableNames, "availableNames");
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        for (String name : availableNames) {
+            if (allows(name) && other.allows(name)) names.add(name);
+        }
+        return only(names);
+    }
+
+    public ToolSelection without(Set<String> deniedNames, Set<String> availableNames) {
+        Objects.requireNonNull(deniedNames, "deniedNames");
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        for (String name : availableNames) {
+            if (allows(name) && !deniedNames.contains(name)) names.add(name);
+        }
+        return only(names);
+    }
 }

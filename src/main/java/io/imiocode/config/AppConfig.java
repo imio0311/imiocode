@@ -146,4 +146,9 @@ public record AppConfig(
                 + ", sessions=" + sessions
                 + ", memory=" + memory + "]";
     }
+
+    public AppConfig withModel(String nextModel) {
+        return new AppConfig(provider, nextModel, apiKey, baseUri, connectTimeout, requestTimeout,
+                maxOutputTokens, thinking, agent, context, ui, instructions, sessions, memory);
+    }
 }

@@ -8,6 +8,7 @@ import io.imiocode.tool.SecretRedactor;
 import io.imiocode.skill.install.SkillInstallConfig;
 import io.imiocode.hook.config.HookConfigLoadResult;
 import io.imiocode.hook.config.HookConfigMapper;
+import io.imiocode.subagent.config.SubagentConfig;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -143,6 +144,7 @@ public final class ConfigLoader {
                 mcp,
                 permissions,
                 buildSkillInstallConfig(document.skills()),
+                buildSubagentConfig(document.subagents()),
                 hooks,
                 redactor,
                 new ConfigSourceSummary(appSource, mcpSource, permissionSource),
@@ -404,6 +406,22 @@ public final class ConfigLoader {
                             ? defaults.allowedHosts() : install.allowedHosts());
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("config.yaml 配置项 skills.install 无效：" + exception.getMessage(), exception);
+        }
+    }
+
+    private static SubagentConfig buildSubagentConfig(ConfigDocument.SubagentsDocument document) {
+        SubagentConfig defaults = SubagentConfig.defaults();
+        if (document == null) return defaults;
+        try {
+            return new SubagentConfig(
+                    document.modelAliases() == null ? defaults.modelAliases() : document.modelAliases(),
+                    document.globallyDeniedTools() == null ? defaults.globallyDeniedTools() : document.globallyDeniedTools(),
+                    document.backgroundAllowedTools() == null ? defaults.backgroundAllowedTools() : document.backgroundAllowedTools(),
+                    document.maxBackgroundTasks() == null ? defaults.maxBackgroundTasks() : document.maxBackgroundTasks(),
+                    document.maxTaskRecords() == null ? defaults.maxTaskRecords() : document.maxTaskRecords(),
+                    document.notificationCapacity() == null ? defaults.notificationCapacity() : document.notificationCapacity());
+        } catch (IllegalArgumentException exception) {
+            throw new ConfigException("config.yaml 配置项 subagents 无效: " + exception.getMessage(), exception);
         }
     }
 
