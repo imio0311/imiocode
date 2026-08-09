@@ -27,6 +27,20 @@ import io.imiocode.context.ConversationSummarizer;
 import io.imiocode.context.SummaryParser;
 import io.imiocode.context.ToolResultOffloader;
 import io.imiocode.context.ToolResultSpillStore;
+import io.imiocode.hook.DefaultHookEngine;
+import io.imiocode.hook.HookEvent;
+import io.imiocode.hook.HookRuntime;
+import io.imiocode.hook.action.ActionDispatcher;
+import io.imiocode.hook.action.AgentPlaceholderHookExecutor;
+import io.imiocode.hook.action.CommandHookExecutor;
+import io.imiocode.hook.action.HttpHookExecutor;
+import io.imiocode.hook.action.JdkHookHttpTransport;
+import io.imiocode.hook.action.JdkHookProcessRunner;
+import io.imiocode.hook.action.PromptHookExecutor;
+import io.imiocode.hook.condition.DefaultConditionEvaluator;
+import io.imiocode.hook.integration.HookContextFactory;
+import io.imiocode.hook.integration.HookToolLifecycleListener;
+import io.imiocode.hook.template.HookTemplateResolver;
 import io.imiocode.conversation.ConversationSession;
 import io.imiocode.instruction.FileInstructionLoader;
 import io.imiocode.instruction.InstructionLoadRequest;
@@ -128,6 +142,8 @@ public final class ImioCodeApplication {
         TerminalUi terminal = null;
         McpManager mcpManager = null;
         SkillInstaller remoteSkillInstaller = null;
+        HookRuntime hookRuntime = HookRuntime.NOOP;
+        HookContextFactory hookContexts = null;
         try {
             Path workspace = Path.of("").toAbsolutePath().normalize();
             Path userHome = Path.of(System.getProperty("user.home")).toAbsolutePath().normalize();
@@ -150,6 +166,27 @@ public final class ImioCodeApplication {
             for (ConfigNotice notice : runtimeConfig.notices()) {
                 terminal.printInfo(notice.safeMessage());
             }
+            for (var error : runtimeConfig.hooks().errors()) {
+                String id = error.hookId().isBlank() ? "#" + error.index() : error.hookId();
+                terminal.printError("[Hook/" + id + "] " + error.safeMessage());
+            }
+            hookContexts = new HookContextFactory(workspace);
+            if (!runtimeConfig.hooks().hooks().isEmpty()) {
+                HookTemplateResolver hookTemplates = new HookTemplateResolver();
+                ActionDispatcher hookActions = new ActionDispatcher(java.util.List.of(
+                        new CommandHookExecutor(hookTemplates, new JdkHookProcessRunner(), redactor),
+                        new PromptHookExecutor(hookTemplates),
+                        new HttpHookExecutor(hookTemplates, new JdkHookHttpTransport(), redactor),
+                        new AgentPlaceholderHookExecutor()));
+                hookRuntime = new DefaultHookEngine(runtimeConfig.hooks().hooks(),
+                        new DefaultConditionEvaluator(), hookActions, redactor,
+                        Clock.systemDefaultZone());
+            }
+            hookRuntime.runHooks(hookContexts.builder(HookEvent.STARTUP).build());
+            HookRuntime configuredHooks = hookRuntime;
+            HookContextFactory configuredHookContexts = hookContexts;
+            HookToolLifecycleListener toolLifecycle = new HookToolLifecycleListener(
+                    configuredHooks, configuredHookContexts);
             WorkspacePolicy policy = new WorkspacePolicy(workspace);
             PermissionSettings permissionSettings = runtimeConfig.permissions();
             RuntimePermissionSettings runtimePermissionSettings = new RuntimePermissionSettings(permissionSettings);
@@ -174,9 +211,9 @@ public final class ImioCodeApplication {
                     new PermissionCoordinator());
             ToolRegistry registry = new ToolRegistry();
             registry.register(new ReadFileTool(policy, limits, redactor));
-            registry.register(new WriteFileTool(policy, limits, redactor));
-            registry.register(new EditFileTool(policy, limits, redactor));
-            registry.register(new BashTool(policy, limits, redactor));
+            registry.register(new WriteFileTool(policy, limits, redactor, toolLifecycle));
+            registry.register(new EditFileTool(policy, limits, redactor, toolLifecycle));
+            registry.register(new BashTool(policy, limits, redactor, toolLifecycle));
             registry.register(new GlobTool(policy, limits, redactor));
             registry.register(new GrepTool(policy, limits, redactor));
 
@@ -260,7 +297,10 @@ public final class ImioCodeApplication {
                     new EnvironmentReminderFormatter(),
                     permissionGate,
                     contextManager,
-                    skillActivator);
+                    skillActivator,
+                    true,
+                    configuredHooks,
+                    configuredHookContexts);
             LlmClient sharedClient = client;
             skillExecutor.setForkRunner(new DefaultSkillForkRunner(() -> new Agent(
                     sharedClient,
@@ -272,7 +312,9 @@ public final class ImioCodeApplication {
                     permissionGate,
                     contextManager,
                     skillActivator,
-                    false)));
+                    false,
+                    configuredHooks,
+                    configuredHookContexts)));
             session = new ConversationSession(agent);
             MarkdownMemoryStore memoryStore = new MarkdownMemoryStore(userHome, workspace);
             MemoryManager memoryManager = new MemoryManager(
@@ -314,7 +356,9 @@ public final class ImioCodeApplication {
                     skillExecutor,
                     new SkillSummaryFormatter(),
                     skillCommandRegistrar,
-                    remoteSkillInstaller);
+                    remoteSkillInstaller,
+                    configuredHooks,
+                    configuredHookContexts);
             String permissionMode = permissionSettings.mode().name()
                     .toLowerCase(java.util.Locale.ROOT);
             if (config.ui().verbosity() == UiVerbosity.COMPACT) {
@@ -351,6 +395,17 @@ public final class ImioCodeApplication {
             if (coordinator == null && remoteSkillInstaller != null) {
                 remoteSkillInstaller.close();
             }
+            if (hookContexts != null) {
+                try {
+                    hookRuntime.runHooks(hookContexts.builder(HookEvent.SHUTDOWN).build());
+                } catch (RuntimeException ignored) {
+                    // 关闭流程不能被 Hook 失败阻塞。
+                }
+                if (terminal != null) {
+                    hookRuntime.drainNotifications().forEach(terminal::showHookNotification);
+                }
+            }
+            hookRuntime.close();
             if (terminal != null) {
                 terminal.close();
             }

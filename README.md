@@ -229,3 +229,47 @@ memory:
 - `/status` 只显示 Provider、模型、工作目录、Agent/权限模式、会话、Token 估算和 MCP 计数，不显示密钥。
 - `/review` 会生成只读代码审查 Prompt 并进入一次 Agent Loop；其他普通本地/UI 命令不会调用 Agent。
 - `/compact` 绕过 Agent Loop 和工具，但会在确有可压缩历史时调用一次专用 LLM 摘要请求。
+
+## Hook 自动化（CH12）
+
+在根 `config.yaml` 的 `hooks` 列表中声明自动化动作，修改配置后需要重启。未配置时 Hook Runtime 为
+NOOP，不创建命令、HTTP 或后台任务。支持以下 15 个事件：
+
+```text
+startup / shutdown / session_start / session_end / turn_start / turn_end
+pre_send / post_receive / pre_tool_use / post_tool_use / permission_request
+file_change / command_execute / compact / error
+```
+
+只有 `pre_tool_use` 可以阻塞工具。下面的规则会在权限判断之前阻止写入 `.env`，失败结果以
+`blocked by hook protect-dotenv: ...` 回传给模型，Agent 可以在下一轮调整方案：
+
+```yaml
+hooks:
+  - id: protect-dotenv
+    event: pre_tool_use
+    if: 'tool_name == "write_file" && args.path ~= "**/.env"'
+    reject: true
+    reject-message: "禁止覆盖 .env，请改用 .env.example。"
+    action:
+      type: prompt
+      message: "检测到敏感配置写入"
+```
+
+条件支持 `==`、`!=`、`=~`（正则）、`~=`（glob）以及纯 `&&` 或纯 `||`；同一表达式不能混用两种连接符。
+模板可用 `$EVENT`、`$TOOL_NAME`、`$FILE_PATH`、`$MESSAGE`、`$ERROR` 和
+`$TOOL_ARGS.<字段>`。变量只展开一次，参数中出现的 `$...` 不会二次执行替换。
+
+动作类型：
+
+- `command`：在工作区的平台 Shell 中执行；默认超时 600 秒，可设 `timeout-seconds`。只继承运行所需的
+  PATH/系统环境，并通过 `MEWCODE_EVENT`、`MEWCODE_TOOL_NAME`、`MEWCODE_FILE_PATH`、
+  `MEWCODE_MESSAGE`、`MEWCODE_ERROR`、`MEWCODE_TOOL_ARGS` 提供上下文。
+- `prompt`：作为 `<system-reminder>` 消息进入下一次模型请求，不修改 System Prompt 和缓存键。
+- `http`：默认 POST JSON，不跟随重定向，响应限制 1 MiB；请求头不会出现在 Hook 通知中。
+- `agent`：CH12 仅保留配置与明确的 `NOT_IMPLEMENTED` 结果，不会调用 LLM。
+
+`once: true` 只在当前进程执行一次，重启后重置；`async: true` 使用有界后台队列，但不允许用于
+`pre_tool_use`。`on-error` 可取 `ignore`、`fail`，`pre_tool_use` 额外支持 `reject`。命令输出、HTTP
+结果、通知和错误统一脱敏。任何 Hook 配置错误都会让本次整个 Hook 列表安全降级为空，并在 UI 显示诊断，
+不会部分加载或阻止 ImioCode 启动。

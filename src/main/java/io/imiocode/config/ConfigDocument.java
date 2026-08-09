@@ -3,11 +3,13 @@ package io.imiocode.config;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.imiocode.mcp.config.McpConfigDocument;
 import io.imiocode.permission.rule.PermissionConfigDocument;
+import io.imiocode.hook.config.HookDocument;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.List;
 
 record ConfigDocument(
         String provider,
@@ -25,6 +27,7 @@ record ConfigDocument(
         SkillsDocument skills,
         McpConfigDocument mcp,
         PermissionConfigDocument permissions,
+        List<HookDocument> hooks,
         Map<String, ProviderConfig> providers) {
 
     ConfigDocument {
@@ -33,12 +36,13 @@ record ConfigDocument(
         } else {
             providers = Collections.unmodifiableMap(new LinkedHashMap<>(providers));
         }
+        hooks = List.copyOf(hooks == null ? List.of() : hooks);
     }
 
     static ConfigDocument empty() {
         return new ConfigDocument(
                 null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, Map.of());
+                null, null, null, null, null, null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -66,6 +70,7 @@ record ConfigDocument(
                 + ", skills=" + (skills == null ? "default" : "configured")
                 + ", mcp=" + (mcp == null ? "absent" : "configured")
                 + ", permissions=" + (permissions == null ? "absent" : "configured")
+                + ", hooks=" + hooks.size()
                 + ", providers=***]";
     }
 

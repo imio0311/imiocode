@@ -6,6 +6,8 @@ import io.imiocode.permission.PermissionSettings;
 import io.imiocode.permission.rule.PermissionRuleLoader;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.skill.install.SkillInstallConfig;
+import io.imiocode.hook.config.HookConfigLoadResult;
+import io.imiocode.hook.config.HookConfigMapper;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -134,11 +136,14 @@ public final class ConfigLoader {
         ConfigSource appSource = Files.exists(configPath, LinkOption.NOFOLLOW_LINKS)
                 ? ConfigSource.UNIFIED
                 : ConfigSource.DEFAULT;
+        HookConfigLoadResult hooks = new HookConfigMapper().load(
+                document.hooks(), environment, redactor::registerSecret);
         return new RuntimeConfig(
                 app,
                 mcp,
                 permissions,
                 buildSkillInstallConfig(document.skills()),
+                hooks,
                 redactor,
                 new ConfigSourceSummary(appSource, mcpSource, permissionSource),
                 notices);

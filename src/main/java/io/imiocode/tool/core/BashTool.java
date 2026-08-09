@@ -6,6 +6,7 @@ import io.imiocode.tool.BaseTool;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolDefinition;
 import io.imiocode.tool.ToolLimits;
+import io.imiocode.tool.ToolLifecycleListener;
 import io.imiocode.tool.ToolResult;
 import io.imiocode.tool.ToolRisk;
 import io.imiocode.tool.workspace.WorkspacePolicy;
@@ -29,11 +30,18 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class BashTool extends BaseTool implements AutoCloseable {
     private final WorkspacePolicy policy;
     private final AtomicReference<Process> activeProcess = new AtomicReference<>();
+    private final ToolLifecycleListener lifecycle;
     private volatile boolean closed;
 
     public BashTool(WorkspacePolicy policy, ToolLimits limits, SecretRedactor redactor) {
+        this(policy, limits, redactor, ToolLifecycleListener.NOOP);
+    }
+
+    public BashTool(WorkspacePolicy policy, ToolLimits limits, SecretRedactor redactor,
+                    ToolLifecycleListener lifecycle) {
         super(createDefinition(), limits, redactor);
         this.policy = Objects.requireNonNull(policy, "policy");
+        this.lifecycle = Objects.requireNonNullElse(lifecycle, ToolLifecycleListener.NOOP);
     }
 
     @Override
@@ -48,6 +56,7 @@ public final class BashTool extends BaseTool implements AutoCloseable {
         redactor.removeSensitiveEnvironment(builder.environment());
 
         Process process = builder.start();
+        lifecycle.onCommandStarted(command);
         if (!activeProcess.compareAndSet(null, process)) {
             terminate(process);
             return ToolResult.failure("已有命令正在执行");

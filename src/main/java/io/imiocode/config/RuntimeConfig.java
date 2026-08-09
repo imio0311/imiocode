@@ -4,6 +4,7 @@ import io.imiocode.mcp.config.McpConfigLoadResult;
 import io.imiocode.permission.PermissionSettings;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.skill.install.SkillInstallConfig;
+import io.imiocode.hook.config.HookConfigLoadResult;
 
 import java.util.List;
 import java.util.Objects;
@@ -14,6 +15,7 @@ public record RuntimeConfig(
         McpConfigLoadResult mcp,
         PermissionSettings permissions,
         SkillInstallConfig skillInstall,
+        HookConfigLoadResult hooks,
         SecretRedactor redactor,
         ConfigSourceSummary sources,
         List<ConfigNotice> notices) {
@@ -23,6 +25,7 @@ public record RuntimeConfig(
         Objects.requireNonNull(mcp, "mcp");
         Objects.requireNonNull(permissions, "permissions");
         Objects.requireNonNull(skillInstall, "skillInstall");
+        Objects.requireNonNull(hooks, "hooks");
         Objects.requireNonNull(redactor, "redactor");
         Objects.requireNonNull(sources, "sources");
         notices = List.copyOf(Objects.requireNonNullElse(notices, List.of()));
@@ -35,6 +38,8 @@ public record RuntimeConfig(
                 + ", mcpErrors=" + mcp.errors().size()
                 + ", permissionsMode=" + permissions.mode()
                 + ", skillInstallHosts=" + skillInstall.allowedHosts().size()
+                + ", hooks=" + hooks.hooks().size()
+                + ", hookErrors=" + hooks.errors().size()
                 + ", redactor=***"
                 + ", sources=" + sources
                 + ", notices=" + notices.size() + "]";

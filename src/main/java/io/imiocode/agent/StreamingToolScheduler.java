@@ -1,5 +1,9 @@
 package io.imiocode.agent;
 
+import io.imiocode.hook.HookEvent;
+import io.imiocode.hook.HookRuntime;
+import io.imiocode.hook.PreToolHookResult;
+import io.imiocode.hook.integration.HookContextFactory;
 import io.imiocode.permission.PermissionAction;
 import io.imiocode.permission.PermissionDecision;
 import io.imiocode.permission.PermissionEvaluation;
@@ -42,12 +46,15 @@ public final class StreamingToolScheduler implements AutoCloseable {
     private final Runnable circuitOpened;
     private final Runnable unsafeExecutionStarted;
     private final PermissionGate permissionGate;
+    private final HookRuntime hooks;
+    private final HookContextFactory hookContexts;
     private final ToolExecutor toolExecutor;
     private final ExecutorService parallelExecutor;
     private final Map<Integer, ToolCall> calls = new TreeMap<>();
     private final Map<Integer, ToolExecution> results = new HashMap<>();
     private final Map<Integer, Future<ToolExecution>> futures = new HashMap<>();
     private final Map<Integer, PermissionEvaluation> permissionEvaluations = new HashMap<>();
+    private final Map<Integer, PreToolHookResult> preToolResults = new HashMap<>();
     private final AtomicBoolean toolsStarted = new AtomicBoolean();
     private boolean streamCompleted;
     private boolean eagerBarrier;
@@ -76,7 +83,8 @@ public final class StreamingToolScheduler implements AutoCloseable {
                 listener,
                 circuitOpened,
                 unsafeExecutionStarted,
-                null);
+                null, HookRuntime.NOOP,
+                new HookContextFactory(java.nio.file.Path.of("")));
     }
 
     public StreamingToolScheduler(
@@ -91,6 +99,25 @@ public final class StreamingToolScheduler implements AutoCloseable {
             Runnable unsafeExecutionStarted,
             PermissionGate permissionGate
     ) {
+        this(registry, selection, iteration, maxParallelTools, toolsMayExecute, circuit,
+                listener, circuitOpened, unsafeExecutionStarted, permissionGate,
+                HookRuntime.NOOP, new HookContextFactory(java.nio.file.Path.of("")));
+    }
+
+    public StreamingToolScheduler(
+            ToolRegistry registry,
+            ToolSelection selection,
+            int iteration,
+            int maxParallelTools,
+            boolean toolsMayExecute,
+            UnknownToolCircuitBreaker.Attempt circuit,
+            AgentEventListener listener,
+            Runnable circuitOpened,
+            Runnable unsafeExecutionStarted,
+            PermissionGate permissionGate,
+            HookRuntime hooks,
+            HookContextFactory hookContexts
+    ) {
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
         this.selection = Objects.requireNonNull(selection, "selection 不能为空");
         if (iteration <= 0 || maxParallelTools <= 0) {
@@ -104,6 +131,8 @@ public final class StreamingToolScheduler implements AutoCloseable {
         this.unsafeExecutionStarted =
                 Objects.requireNonNull(unsafeExecutionStarted, "unsafeExecutionStarted 不能为空");
         this.permissionGate = permissionGate;
+        this.hooks = Objects.requireNonNullElse(hooks, HookRuntime.NOOP);
+        this.hookContexts = Objects.requireNonNull(hookContexts, "hookContexts 不能为空");
         this.toolExecutor = new ToolExecutor(registry);
         this.parallelExecutor = Executors.newFixedThreadPool(
                 maxParallelTools,
@@ -151,6 +180,12 @@ public final class StreamingToolScheduler implements AutoCloseable {
                 continue;
             }
             Tool tool = resolution.tool().orElseThrow();
+            PreToolHookResult preTool = preToolResult(nextEager, call);
+            if (!preTool.allowed()) {
+                results.put(nextEager, hookRejectedExecution(call, preTool));
+                nextEager++;
+                continue;
+            }
             if ("load_skill".equals(call.name())) {
                 // fork Skill 可能发起新的模型请求，必须等当前模型流完整结束。
                 eagerBarrier = true;
@@ -184,8 +219,23 @@ public final class StreamingToolScheduler implements AutoCloseable {
     }
 
     private ToolExecution executeOne(int index, ToolCall call) {
-        return toolExecutor.execute(call, selection, event -> listener.onEvent(
+        ToolExecution execution = toolExecutor.execute(call, selection, event -> listener.onEvent(
                 new AgentEvent.ToolExecutionChanged(iteration, index, event)));
+        try {
+            var builder = hookContexts.builder(HookEvent.POST_TOOL_USE)
+                    .iteration(iteration)
+                    .toolName(call.name())
+                    .toolArgs(HookContextFactory.toolArgs(call.arguments()))
+                    .message(execution.result().success()
+                            ? execution.result().output() : execution.result().error())
+                    .data("success", execution.result().success());
+            if (execution.result().exitCode() != null)
+                builder.data("exit_code", execution.result().exitCode());
+            hooks.runHooks(builder.build());
+        } catch (RuntimeException ignored) {
+            // 后置 Hook 失败不能覆盖真实工具结果。
+        }
+        return execution;
     }
 
     public synchronized void onStreamCompleted() {
@@ -239,6 +289,12 @@ public final class StreamingToolScheduler implements AutoCloseable {
                 continue;
             }
             Tool tool = resolution.tool().orElseThrow();
+            PreToolHookResult preTool = preToolResult(index, call);
+            if (!preTool.allowed()) {
+                putResult(index, hookRejectedExecution(call, preTool));
+                position++;
+                continue;
+            }
             PermissionDecision permission = resolvePermission(index, call, tool);
             if (permission.action() == PermissionAction.DENY) {
                 putResult(index, permissionDeniedExecution(call, permission));
@@ -270,6 +326,10 @@ public final class StreamingToolScheduler implements AutoCloseable {
                 if (candidateResolution.availability() != ToolAvailability.AVAILABLE
                         || candidateResolution.tool().orElseThrow()
                         .definition().risk() != ToolRisk.LOW) {
+                    break;
+                }
+                PreToolHookResult candidatePreTool = preToolResult(candidateIndex, candidate);
+                if (!candidatePreTool.allowed()) {
                     break;
                 }
                 PermissionEvaluation candidateEvaluation = permissionEvaluation(
@@ -400,6 +460,15 @@ public final class StreamingToolScheduler implements AutoCloseable {
                 ignored -> permissionGate.evaluate(call, tool));
     }
 
+    private synchronized PreToolHookResult preToolResult(int index, ToolCall call) {
+        return preToolResults.computeIfAbsent(index, ignored -> hooks.runPreToolHooks(
+                hookContexts.builder(HookEvent.PRE_TOOL_USE)
+                        .iteration(iteration)
+                        .toolName(call.name())
+                        .toolArgs(HookContextFactory.toolArgs(call.arguments()))
+                        .build()));
+    }
+
     private PermissionDecision resolvePermission(int index, ToolCall call, Tool tool) {
         PermissionEvaluation evaluation = permissionEvaluation(index, call, tool);
         if (evaluation == null) {
@@ -409,6 +478,14 @@ public final class StreamingToolScheduler implements AutoCloseable {
         }
         if (evaluation.decision().action() != PermissionAction.ASK) {
             return evaluation.decision();
+        }
+        try {
+            hooks.runHooks(hookContexts.builder(HookEvent.PERMISSION_REQUEST)
+                    .iteration(iteration).toolName(call.name())
+                    .toolArgs(HookContextFactory.toolArgs(call.arguments()))
+                    .message(evaluation.decision().reason()).build());
+        } catch (RuntimeException ignored) {
+            // 权限对话仍必须由用户决定，Hook 失败只进入通知。
         }
         return permissionGate.confirm(
                 evaluation,
@@ -425,6 +502,11 @@ public final class StreamingToolScheduler implements AutoCloseable {
         return new ToolExecution(
                 call,
                 ToolResult.failure("权限拒绝：" + decision.reason()));
+    }
+
+    private static ToolExecution hookRejectedExecution(ToolCall call, PreToolHookResult result) {
+        return new ToolExecution(call, ToolResult.failure(
+                result.rejection().orElseThrow().getMessage()));
     }
 
     @Override

@@ -18,6 +18,10 @@ import io.imiocode.memory.MemoryEntry;
 import io.imiocode.memory.MemoryExtractor;
 import io.imiocode.memory.MemoryManager;
 import io.imiocode.memory.MemoryScope;
+import io.imiocode.hook.HookEvent;
+import io.imiocode.hook.HookNotification;
+import io.imiocode.hook.HookRuntime;
+import io.imiocode.hook.integration.HookContextFactory;
 import io.imiocode.persistence.PersistenceEvent;
 import io.imiocode.persistence.PersistenceEventListener;
 import io.imiocode.persistence.PersistentContextProvider;
@@ -46,6 +50,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.net.URI;
 
 /** 在核心会话之外编排持久化和记忆，保持底层 Agent 依赖单向。 */
@@ -71,6 +76,9 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     private final SkillSummaryFormatter skillSummaryFormatter;
     private final SkillCommandRegistrar skillCommandRegistrar;
     private final SkillInstaller skillInstaller;
+    private final HookRuntime hooks;
+    private final HookContextFactory hookContexts;
+    private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicReference<SkillInvocation> pendingSkill = new AtomicReference<>();
     private volatile long synchronizedSkillGeneration = -1;
     private SessionSnapshot current;
@@ -95,7 +103,8 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
             int registeredMcpTools) {
         this(core, sessions, sessionsConfig, memories, memoryConfig, extractor, context, events,
                 clock, permissionSettings, tokenEstimator, provider, model, workspace,
-                contextWindowTokens, connectedMcpServers, registeredMcpTools, null, null, null, null);
+                contextWindowTokens, connectedMcpServers, registeredMcpTools, null, null, null, null,
+                HookRuntime.NOOP, new HookContextFactory(workspace));
     }
 
     public ConversationCoordinator(
@@ -122,7 +131,8 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
         this(core, sessions, sessionsConfig, memories, memoryConfig, extractor, context, events,
                 clock, permissionSettings, tokenEstimator, provider, model, workspace,
                 contextWindowTokens, connectedMcpServers, registeredMcpTools,
-                skillExecutor, skillSummaryFormatter, skillCommandRegistrar, null);
+                skillExecutor, skillSummaryFormatter, skillCommandRegistrar, null,
+                HookRuntime.NOOP, new HookContextFactory(workspace));
     }
 
     public ConversationCoordinator(
@@ -147,6 +157,37 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
             SkillSummaryFormatter skillSummaryFormatter,
             SkillCommandRegistrar skillCommandRegistrar,
             SkillInstaller skillInstaller) {
+        this(core, sessions, sessionsConfig, memories, memoryConfig, extractor, context, events,
+                clock, permissionSettings, tokenEstimator, provider, model, workspace,
+                contextWindowTokens, connectedMcpServers, registeredMcpTools,
+                skillExecutor, skillSummaryFormatter, skillCommandRegistrar, skillInstaller,
+                HookRuntime.NOOP, new HookContextFactory(workspace));
+    }
+
+    public ConversationCoordinator(
+            ConversationSession core,
+            SessionManager sessions,
+            SessionsConfig sessionsConfig,
+            MemoryManager memories,
+            MemoryConfig memoryConfig,
+            MemoryExtractor extractor,
+            PersistentContextProvider context,
+            PersistenceEventListener events,
+            Clock clock,
+            RuntimePermissionSettings permissionSettings,
+            ApproximateTokenEstimator tokenEstimator,
+            String provider,
+            String model,
+            Path workspace,
+            long contextWindowTokens,
+            int connectedMcpServers,
+            int registeredMcpTools,
+            SkillExecutor skillExecutor,
+            SkillSummaryFormatter skillSummaryFormatter,
+            SkillCommandRegistrar skillCommandRegistrar,
+            SkillInstaller skillInstaller,
+            HookRuntime hooks,
+            HookContextFactory hookContexts) {
         this.core = core; this.sessions = sessions; this.sessionsConfig = sessionsConfig;
         this.memories = memories; this.memoryConfig = memoryConfig; this.extractor = extractor;
         this.context = context; this.events = events == null ? PersistenceEventListener.noop() : events;
@@ -165,8 +206,11 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
         this.skillSummaryFormatter = skillSummaryFormatter;
         this.skillCommandRegistrar = skillCommandRegistrar;
         this.skillInstaller = skillInstaller;
+        this.hooks = java.util.Objects.requireNonNullElse(hooks, HookRuntime.NOOP);
+        this.hookContexts = java.util.Objects.requireNonNull(hookContexts, "hookContexts");
         this.current = sessionsConfig.enabled() ? sessions.createNew() : ephemeral(List.of());
         if (sessionsConfig.enabled()) sessions.applyRetention(current.metadata().id());
+        startSession(current);
     }
 
     public ChatResponse sendWithEvents(String userInput, ConversationListener listener) throws ConversationException {
@@ -256,8 +300,10 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     public SessionSummary newSession() {
         requireIdle();
         SessionSnapshot next = sessionsConfig.enabled() ? sessions.createNew() : newEphemeral();
+        endCurrentSession();
         core.replaceHistory(List.of()); current = next;
         context.reloadInstructions(); context.reloadMemories();
+        startSession(next);
         return summary(next);
     }
 
@@ -265,8 +311,10 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     public SessionLoadResult resumeSession(SessionId id) {
         requireSessions(); requireIdle();
         SessionLoadResult loaded = sessions.load(id);
+        endCurrentSession();
         core.replaceHistory(loaded.snapshot().history()); current = loaded.snapshot();
         context.reloadInstructions(); context.reloadMemories();
+        startSession(current);
         events.onEvent(new PersistenceEvent.SessionRestored(id, loaded.snapshot().history().size()));
         loaded.quarantinedTail().ifPresent(path -> events.onEvent(new PersistenceEvent.SessionTailRecovered(id, path)));
         return loaded;
@@ -353,6 +401,7 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
     }
 
     public boolean respondPermission(String requestId, PermissionReply reply) { return core.respondPermission(requestId, reply); }
+    public List<HookNotification> drainHookNotifications() { return hooks.drainNotifications(); }
     public void cancelActive() {
         core.cancelActive();
         if (skillExecutor != null) skillExecutor.cancelFork();
@@ -363,9 +412,28 @@ public final class ConversationCoordinator implements CommandServices, AutoClose
         return core.isActive() || (skillExecutor != null && skillExecutor.isForkActive());
     }
     @Override public void close() {
+        if (!closed.compareAndSet(false, true)) return;
         cancelActive();
+        try { endCurrentSession(); }
+        catch (RuntimeException ignored) {
+            // 关闭不能被 session_end Hook 失败阻塞。
+            hooks.clearPrompts();
+            hookContexts.clearSessionId();
+        }
         if (skillInstaller != null) skillInstaller.close();
         core.close();
+    }
+
+    private void startSession(SessionSnapshot snapshot) {
+        hookContexts.setSessionId(snapshot.metadata().id().value());
+        hooks.runHooks(hookContexts.builder(HookEvent.SESSION_START).build());
+    }
+
+    private void endCurrentSession() {
+        if (current == null) return;
+        hooks.runHooks(hookContexts.builder(HookEvent.SESSION_END).build());
+        hooks.clearPrompts();
+        hookContexts.clearSessionId();
     }
 
     private void requireIdle() { if (core.isActive()) throw new IllegalStateException("Agent 正在执行，暂不能切换会话"); }

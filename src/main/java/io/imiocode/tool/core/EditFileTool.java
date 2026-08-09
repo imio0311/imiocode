@@ -6,6 +6,7 @@ import io.imiocode.tool.BaseTool;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolDefinition;
 import io.imiocode.tool.ToolLimits;
+import io.imiocode.tool.ToolLifecycleListener;
 import io.imiocode.tool.ToolResult;
 import io.imiocode.tool.ToolRisk;
 import io.imiocode.tool.workspace.AtomicFileWriter;
@@ -20,11 +21,18 @@ import java.util.Objects;
 public final class EditFileTool extends BaseTool {
     private final WorkspacePolicy policy;
     private final AtomicFileWriter writer;
+    private final ToolLifecycleListener lifecycle;
 
     public EditFileTool(WorkspacePolicy policy, ToolLimits limits, SecretRedactor redactor) {
+        this(policy, limits, redactor, ToolLifecycleListener.NOOP);
+    }
+
+    public EditFileTool(WorkspacePolicy policy, ToolLimits limits, SecretRedactor redactor,
+                        ToolLifecycleListener lifecycle) {
         super(createDefinition(), limits, redactor);
         this.policy = Objects.requireNonNull(policy, "policy");
         this.writer = new AtomicFileWriter(policy);
+        this.lifecycle = Objects.requireNonNullElse(lifecycle, ToolLifecycleListener.NOOP);
     }
 
     @Override
@@ -53,6 +61,7 @@ public final class EditFileTool extends BaseTool {
             throw new IllegalArgumentException("编辑结果超过 1 MiB 限制");
         }
         writer.write(input, updated);
+        lifecycle.onFileChanged("edit_file", path);
         return ToolResult.success("已编辑 " + input);
     }
 

@@ -6,6 +6,7 @@ import io.imiocode.tool.BaseTool;
 import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolDefinition;
 import io.imiocode.tool.ToolLimits;
+import io.imiocode.tool.ToolLifecycleListener;
 import io.imiocode.tool.ToolResult;
 import io.imiocode.tool.ToolRisk;
 import io.imiocode.tool.workspace.AtomicFileWriter;
@@ -18,11 +19,18 @@ import java.util.Objects;
 public final class WriteFileTool extends BaseTool {
     private final WorkspacePolicy policy;
     private final AtomicFileWriter writer;
+    private final ToolLifecycleListener lifecycle;
 
     public WriteFileTool(WorkspacePolicy policy, ToolLimits limits, SecretRedactor redactor) {
+        this(policy, limits, redactor, ToolLifecycleListener.NOOP);
+    }
+
+    public WriteFileTool(WorkspacePolicy policy, ToolLimits limits, SecretRedactor redactor,
+                         ToolLifecycleListener lifecycle) {
         super(createDefinition(), limits, redactor);
         this.policy = Objects.requireNonNull(policy, "policy");
         this.writer = new AtomicFileWriter(policy);
+        this.lifecycle = Objects.requireNonNullElse(lifecycle, ToolLifecycleListener.NOOP);
     }
 
     @Override
@@ -36,6 +44,7 @@ public final class WriteFileTool extends BaseTool {
         }
         policy.resolveWritableFile(path);
         writer.write(path, content);
+        lifecycle.onFileChanged("write_file", policy.workspace().resolve(path).normalize());
         return ToolResult.success("已写入 " + path + "（" + bytes + " 字节）");
     }
 

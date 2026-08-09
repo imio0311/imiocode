@@ -5,11 +5,15 @@ import io.imiocode.conversation.ChatResponse;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
+import io.imiocode.hook.HookEvent;
+import io.imiocode.hook.HookRuntime;
+import io.imiocode.hook.integration.HookContextFactory;
 import io.imiocode.permission.PermissionGate;
 import io.imiocode.tool.ToolExecution;
 import io.imiocode.tool.ToolRegistry;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -25,13 +29,16 @@ public final class StreamingTurnExecutor {
     private final RetryWaiter retryWaiter;
     private final int maxParallelTools;
     private final PermissionGate permissionGate;
+    private final HookRuntime hooks;
+    private final HookContextFactory hookContexts;
 
     public StreamingTurnExecutor(
             LlmClient client,
             ToolRegistry registry,
             int maxParallelTools
     ) {
-        this(client, registry, maxParallelTools, new LlmRetryPolicy(), new DefaultRetryWaiter(), null);
+        this(client, registry, maxParallelTools, new LlmRetryPolicy(), new DefaultRetryWaiter(), null,
+                HookRuntime.NOOP, new HookContextFactory(java.nio.file.Path.of("")));
     }
 
     public StreamingTurnExecutor(
@@ -41,7 +48,14 @@ public final class StreamingTurnExecutor {
             PermissionGate permissionGate
     ) {
         this(client, registry, maxParallelTools, new LlmRetryPolicy(), new DefaultRetryWaiter(),
-                permissionGate);
+                permissionGate, HookRuntime.NOOP, new HookContextFactory(java.nio.file.Path.of("")));
+    }
+
+    public StreamingTurnExecutor(LlmClient client, ToolRegistry registry, int maxParallelTools,
+                                 PermissionGate permissionGate, HookRuntime hooks,
+                                 HookContextFactory hookContexts) {
+        this(client, registry, maxParallelTools, new LlmRetryPolicy(), new DefaultRetryWaiter(),
+                permissionGate, hooks, hookContexts);
     }
 
     StreamingTurnExecutor(
@@ -51,7 +65,8 @@ public final class StreamingTurnExecutor {
             LlmRetryPolicy retryPolicy,
             RetryWaiter retryWaiter
     ) {
-        this(client, registry, maxParallelTools, retryPolicy, retryWaiter, null);
+        this(client, registry, maxParallelTools, retryPolicy, retryWaiter, null,
+                HookRuntime.NOOP, new HookContextFactory(java.nio.file.Path.of("")));
     }
 
     StreamingTurnExecutor(
@@ -61,6 +76,20 @@ public final class StreamingTurnExecutor {
             LlmRetryPolicy retryPolicy,
             RetryWaiter retryWaiter,
             PermissionGate permissionGate
+    ) {
+        this(client, registry, maxParallelTools, retryPolicy, retryWaiter, permissionGate,
+                HookRuntime.NOOP, new HookContextFactory(java.nio.file.Path.of("")));
+    }
+
+    StreamingTurnExecutor(
+            LlmClient client,
+            ToolRegistry registry,
+            int maxParallelTools,
+            LlmRetryPolicy retryPolicy,
+            RetryWaiter retryWaiter,
+            PermissionGate permissionGate,
+            HookRuntime hooks,
+            HookContextFactory hookContexts
     ) {
         this.client = Objects.requireNonNull(client, "client 不能为空");
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
@@ -72,6 +101,8 @@ public final class StreamingTurnExecutor {
         this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy 不能为空");
         this.retryWaiter = Objects.requireNonNull(retryWaiter, "retryWaiter 不能为空");
         this.permissionGate = permissionGate;
+        this.hooks = Objects.requireNonNullElse(hooks, HookRuntime.NOOP);
+        this.hookContexts = Objects.requireNonNull(hookContexts, "hookContexts 不能为空");
     }
 
     public StreamingTurnResult execute(
@@ -87,6 +118,7 @@ public final class StreamingTurnExecutor {
         Objects.requireNonNull(breaker, "breaker 不能为空");
         AgentEventListener events = Objects.requireNonNullElse(listener, AgentEventListener.NOOP);
         int retries = 0;
+        List<io.imiocode.conversation.SystemReminder> carriedHookReminders = hooks.drainPrompts();
         int currentLimit = request.outputTokenLimit().orElseThrow(
                 () -> new IllegalArgumentException("Agent 请求必须携带输出 token 上限"));
 
@@ -107,14 +139,22 @@ public final class StreamingTurnExecutor {
                         client.cancelActiveRequest();
                     },
                     task::markSideEffectsPossible,
-                    permissionGate
+                    permissionGate,
+                    hooks,
+                    hookContexts
             )) {
                 Runnable cancellation = scheduler::cancel;
                 task.attachCancellation(cancellation);
                 try {
+                    hooks.runHooks(hookContexts.builder(HookEvent.PRE_SEND)
+                            .iteration(iteration).data("attempt", attempt).build());
+                    List<io.imiocode.conversation.SystemReminder> attemptReminders =
+                            new ArrayList<>(request.reminders());
+                    attemptReminders.addAll(carriedHookReminders);
+                    attemptReminders.addAll(hooks.drainPrompts());
                     ChatRequest attemptRequest = new ChatRequest(
                             request.messages(),
-                            request.reminders(),
+                            attemptReminders,
                             request.toolSelection(),
                             OptionalInt.of(currentLimit),
                             request.systemPromptOverride());
@@ -124,6 +164,9 @@ public final class StreamingTurnExecutor {
                             attempt,
                             events,
                             scheduler::onToolCallCompleted);
+                    hooks.runHooks(hookContexts.builder(HookEvent.POST_RECEIVE)
+                            .iteration(iteration).data("attempt", attempt)
+                            .data("tool_calls", response.toolCalls().size()).build());
                     scheduler.ensureResponseCalls(response.toolCalls());
                     if (circuitState.open) {
                         throw new UnknownToolCircuitOpenException();

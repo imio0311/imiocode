@@ -87,3 +87,38 @@ permissions:
       tool: mcp_context7__query-docs
     - action: allow
       tool: mcp_context7__resolve-library-id
+
+# CH12 Hook 默认关闭。取消下面示例的注释后，重启 ImioCode 生效。
+hooks: []
+# hooks:
+#   - id: inject-project-rule
+#     event: turn_start
+#     once: true
+#     action:
+#       type: prompt
+#       message: "本项目的 Java 代码必须通过 Maven 测试。"
+#   - id: protect-dotenv
+#     event: pre_tool_use
+#     if: 'tool_name == "write_file" && args.path ~= "**/.env"'
+#     reject: true
+#     reject-message: "禁止覆盖 .env，请改用 .env.example。"
+#     action:
+#       type: prompt
+#       message: "检测到敏感配置写入"
+#   - id: format-after-write
+#     event: file_change
+#     async: true
+#     on-error: ignore
+#     action:
+#       type: command
+#       command: "mvn -q spotless:apply"
+#       timeout-seconds: 120
+#   - id: notify-build-service
+#     event: turn_end
+#     async: true
+#     action:
+#       type: http
+#       url: "https://example.invalid/hooks/$EVENT"
+#       method: POST
+#       headers:
+#         Authorization: "Bearer ${HOOK_TOKEN}"

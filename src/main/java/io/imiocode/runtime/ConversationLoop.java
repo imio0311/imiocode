@@ -34,6 +34,7 @@ public final class ConversationLoop {
         CommandContext commandContext = new CommandContext(coordinator, terminal, commands);
         terminal.refreshStatus(coordinator.status());
         while (!stopping.get()) {
+            drainHookNotifications();
             String input = terminal.readLine("You> ");
             if (input == null || stopping.get()) break;
             if (input.trim().isEmpty()) continue;
@@ -51,6 +52,7 @@ public final class ConversationLoop {
                 } else {
                     terminal.refreshStatus(coordinator.status());
                 }
+                drainHookNotifications();
                 continue;
             }
             runAgent(input);
@@ -76,8 +78,13 @@ public final class ConversationLoop {
             terminal.endAssistantResponse(); terminal.updateState(UiState.ERROR);
             terminal.printError("对话处理发生未知错误，本轮响应未完成");
         } finally {
+            drainHookNotifications();
             if (!stopping.get()) terminal.refreshStatus(coordinator.status());
         }
+    }
+
+    private void drainHookNotifications() {
+        coordinator.drainHookNotifications().forEach(terminal::showHookNotification);
     }
 
     public void requestStop() {

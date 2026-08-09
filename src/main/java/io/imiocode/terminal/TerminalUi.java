@@ -17,6 +17,8 @@ import io.imiocode.config.UiVerbosity;
 import io.imiocode.command.CommandStatus;
 import io.imiocode.command.ConfirmationPrompt;
 import io.imiocode.command.UIController;
+import io.imiocode.hook.HookExecutionStatus;
+import io.imiocode.hook.HookNotification;
 
 public interface TerminalUi extends AutoCloseable, McpLaunchApprover, McpEventListener, UIController {
     void showWelcome(UiContext context);
@@ -134,6 +136,19 @@ public interface TerminalUi extends AutoCloseable, McpLaunchApprover, McpEventLi
         } else {
             printInfo("[上下文] " + report.message());
         }
+    }
+
+    default void showHookNotification(HookNotification notification) {
+        boolean important = notification.status() == HookExecutionStatus.FAILED
+                || notification.status() == HookExecutionStatus.TIMED_OUT
+                || notification.status() == HookExecutionStatus.REJECTED
+                || notification.status() == HookExecutionStatus.NOT_IMPLEMENTED;
+        if (!important && verbosity() != UiVerbosity.VERBOSE) return;
+        String text = "[Hook/" + notification.hookId() + "] "
+                + notification.event().configName() + " · "
+                + notification.status().name().toLowerCase(java.util.Locale.ROOT)
+                + (notification.summary().isBlank() ? "" : " · " + notification.summary());
+        if (important) printError(text); else printInfo(text);
     }
 
     void printError(String message);

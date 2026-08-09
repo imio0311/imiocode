@@ -16,6 +16,10 @@ import io.imiocode.conversation.ToolResultPart;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
+import io.imiocode.hook.HookEvent;
+import io.imiocode.hook.HookContext;
+import io.imiocode.hook.HookRuntime;
+import io.imiocode.hook.integration.HookContextFactory;
 import io.imiocode.prompt.EnvironmentContextCollector;
 import io.imiocode.prompt.EnvironmentContextProvider;
 import io.imiocode.prompt.EnvironmentReminderFormatter;
@@ -57,6 +61,8 @@ public final class Agent implements AutoCloseable {
     private final ContextManager contextManager;
     private final SkillActivator skillActivator;
     private final boolean closeSharedResources;
+    private final HookRuntime hooks;
+    private final HookContextFactory hookContexts;
     private final AtomicReference<ModeState> modeState =
             new AtomicReference<>(new ModeState(AgentMode.DO, false));
     private final AtomicReference<AgentTaskContext> activeTask = new AtomicReference<>();
@@ -162,6 +168,26 @@ public final class Agent implements AutoCloseable {
             SkillActivator skillActivator,
             boolean closeSharedResources
     ) {
+        this(client, registry, config, initialOutputTokenLimit, environmentContextProvider,
+                environmentReminderFormatter, permissionGate, contextManager, skillActivator,
+                closeSharedResources, HookRuntime.NOOP,
+                new HookContextFactory(Path.of("")));
+    }
+
+    public Agent(
+            LlmClient client,
+            ToolRegistry registry,
+            AgentConfig config,
+            int initialOutputTokenLimit,
+            EnvironmentContextProvider environmentContextProvider,
+            EnvironmentReminderFormatter environmentReminderFormatter,
+            PermissionGate permissionGate,
+            ContextManager contextManager,
+            SkillActivator skillActivator,
+            boolean closeSharedResources,
+            HookRuntime hooks,
+            HookContextFactory hookContexts
+    ) {
         this.client = Objects.requireNonNull(client, "client 不能为空");
         this.registry = Objects.requireNonNull(registry, "registry 不能为空");
         this.config = Objects.requireNonNull(config, "config 不能为空");
@@ -175,12 +201,14 @@ public final class Agent implements AutoCloseable {
         this.contextManager = contextManager;
         this.skillActivator = skillActivator;
         this.closeSharedResources = closeSharedResources;
+        this.hooks = Objects.requireNonNullElse(hooks, HookRuntime.NOOP);
+        this.hookContexts = Objects.requireNonNull(hookContexts, "hookContexts 不能为空");
         if (initialOutputTokenLimit <= 0) {
             throw new IllegalArgumentException("initialOutputTokenLimit 必须为正数");
         }
         this.initialOutputTokenLimit = initialOutputTokenLimit;
         this.turnExecutor = new StreamingTurnExecutor(
-                client, registry, config.maxParallelTools(), permissionGate);
+                client, registry, config.maxParallelTools(), permissionGate, this.hooks, this.hookContexts);
     }
 
     public AgentMode mode() {
@@ -248,6 +276,8 @@ public final class Agent implements AutoCloseable {
         );
 
         try {
+            hooks.runHooks(hookContexts.builder(HookEvent.TURN_START)
+                    .message(request.userMessage().toString()).build());
             checkedListener.onEvent(new AgentEvent.TaskStarted(taskMode));
 
             for (int iteration = 1; iteration <= config.maxIterations(); iteration++) {
@@ -286,6 +316,7 @@ public final class Agent implements AutoCloseable {
                                     OptionalInt.of(initialOutputTokenLimit), ContextManageMode.AUTO, compactTracking),
                             event -> checkedListener.onEvent(new AgentEvent.ContextChanged(event)));
                     conversation.apply(managed);
+                    emitCompactHook(managed, iteration, "auto");
                 }
                 StreamingTurnResult turn;
                 boolean contextRecovered = false;
@@ -309,6 +340,7 @@ public final class Agent implements AutoCloseable {
                                 event -> checkedListener.onEvent(new AgentEvent.ContextChanged(event)));
                         if (!recovered.compacted()) throw exception;
                         conversation.apply(recovered);
+                        emitCompactHook(recovered, iteration, "recovery");
                         contextRecovered = true;
                     }
                 }
@@ -386,6 +418,7 @@ public final class Agent implements AutoCloseable {
                     exception.retryAfter()
             );
             context.tryFinish(AgentStopReason.ERROR);
+            emitErrorHook(exception.safeMessage(), iterations);
             return failed(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations, error, checkedListener);
         } catch (RuntimeException exception) {
             Optional<AgentStopReason> existing = context.stopReason();
@@ -394,8 +427,10 @@ public final class Agent implements AutoCloseable {
             }
             AgentError error = new AgentError("Agent 执行失败", false);
             context.tryFinish(AgentStopReason.ERROR);
+            emitErrorHook(exception.getMessage(), iterations);
             return failed(context, conversation.rollbackCommitted(), conversation.trajectory(), iterations, error, checkedListener);
         } finally {
+            emitTurnEndHook(context, iterations);
             timeoutFuture.cancel(false);
             activeTask.compareAndSet(context, null);
             skillScope.close();
@@ -518,11 +553,50 @@ public final class Agent implements AutoCloseable {
                     io.imiocode.context.ContextOutcome.UNCHANGED);
         }
         AgentEventListener events = Objects.requireNonNullElse(listener, AgentEventListener.NOOP);
-        return contextManager.manage(new ContextRequest(
+        ContextResult result = contextManager.manage(new ContextRequest(
                         history, List.of(), List.of(), PlanModePrompt.toolSelection(mode()),
                         OptionalInt.of(initialOutputTokenLimit), ContextManageMode.FORCE,
                         new AutoCompactTrackingState()),
                 event -> events.onEvent(new AgentEvent.ContextChanged(event)));
+        emitCompactHook(result, 0, "manual");
+        return result;
+    }
+
+    private void emitCompactHook(ContextResult result, int iteration, String mode) {
+        if (!result.compacted()) return;
+        try {
+            HookContext.Builder builder = hookContexts.builder(HookEvent.COMPACT)
+                    .data("mode", mode)
+                    .data("before_tokens", result.beforeTokens())
+                    .data("after_tokens", result.afterTokens());
+            if (iteration > 0) builder.iteration(iteration);
+            hooks.runHooks(builder.build());
+        } catch (RuntimeException ignored) {
+            // 压缩已经成功，Hook 失败不能回滚上下文。
+        }
+    }
+
+    private void emitErrorHook(String message, int iteration) {
+        try {
+            HookContext.Builder builder = hookContexts.builder(HookEvent.ERROR)
+                    .error(message == null || message.isBlank() ? "Agent 执行失败" : message);
+            if (iteration > 0) builder.iteration(iteration);
+            hooks.runHooks(builder.build());
+        } catch (RuntimeException ignored) {
+            // error Hook 失败不得递归触发 error，也不得覆盖原错误。
+        }
+    }
+
+    private void emitTurnEndHook(AgentTaskContext context, int iterations) {
+        try {
+            HookContext.Builder builder = hookContexts.builder(HookEvent.TURN_END)
+                    .data("status", context.stopReason().map(value -> value.name().toLowerCase(java.util.Locale.ROOT))
+                            .orElse("failed"));
+            if (iterations > 0) builder.iteration(iterations);
+            hooks.runHooks(builder.build());
+        } catch (RuntimeException ignored) {
+            // 终态已确定，Hook 失败只能由通知呈现。
+        }
     }
 
     public boolean respondPermission(String requestId, PermissionReply reply) {
