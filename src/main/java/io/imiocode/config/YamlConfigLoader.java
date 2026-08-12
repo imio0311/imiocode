@@ -15,12 +15,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 
+/**
+ * 从工作目录读取严格类型的根 YAML 配置文档。
+ *
+ * <p>解析错误只向终端暴露字段路径和行列，不回显原始值，避免配置中的凭据进入诊断信息。</p>
+ */
 final class YamlConfigLoader {
     static final String FILE_NAME = "config.yaml";
 
     private final ObjectMapper objectMapper;
 
     YamlConfigLoader() {
+        // 禁止字符串到数字或布尔值的宽松转换，使拼写错误在启动阶段明确失败。
         objectMapper = JsonMapper.builder(new YAMLFactory())
                 .enable(MapperFeature.ALLOW_FINAL_FIELDS_AS_MUTATORS)
                 .disable(MapperFeature.ALLOW_COERCION_OF_SCALARS)

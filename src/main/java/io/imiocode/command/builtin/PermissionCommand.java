@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+/** 查询或临时切换当前进程权限模式，不修改磁盘配置和已有规则。 */
 public final class PermissionCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "permission", Set.of("perm"), "/permission [ask|auto-edit|read-only|full-access|lockdown]",

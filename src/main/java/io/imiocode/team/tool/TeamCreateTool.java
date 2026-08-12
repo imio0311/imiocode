@@ -6,6 +6,7 @@ import io.imiocode.team.runtime.*;
 import io.imiocode.tool.*;
 import java.util.Objects;
 
+/** 创建持久团队并将当前 Agent 绑定为该团队 Lead。 */
 public final class TeamCreateTool extends BaseTool {
     private final AgentTeamManager teams;private final TeamToolContext context;
     public TeamCreateTool(AgentTeamManager teams,TeamToolContext context,ToolLimits limits,SecretRedactor redactor){super(createDefinition(),limits,redactor);this.teams=Objects.requireNonNull(teams);this.context=Objects.requireNonNull(context);}

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+/** 按优先级把已展开项目指令格式化为会话级 System Reminder。 */
 public final class InstructionReminderFormatter {
     public List<SystemReminder> format(InstructionSnapshot snapshot, Path workspace, Path userHome) {
         List<InstructionSource> ordered = snapshot.sources().stream()

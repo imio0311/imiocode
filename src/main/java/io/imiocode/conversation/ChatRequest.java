@@ -6,6 +6,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 
+/**
+ * 一次 Provider 调用所需的不可变消息、提醒、工具选择和可选覆盖项。
+ *
+ * <p>System Prompt 覆盖主要供受控子 Agent 场景使用；普通对话由 PromptAssembler 统一构建。</p>
+ */
 public record ChatRequest(
         List<ChatMessage> messages,
         List<SystemReminder> reminders,

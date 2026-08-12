@@ -16,6 +16,11 @@ import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.Optional;
 
+/**
+ * 从会话 JSONL 的头记录和最后一次提交快速提取列表元数据。
+ *
+ * <p>为避免列出大量会话时完整解析历史，只反向扫描文件末尾最多 1 MiB；找不到提交时回退到空会话元数据。</p>
+ */
 public final class SessionMetadataReader {
     private static final long MAX_TAIL_SCAN_BYTES = 1024L * 1024L;
     private final SessionRecordCodec codec;
@@ -52,6 +57,7 @@ public final class SessionMetadataReader {
             while (tail.hasRemaining() && channel.read(tail) >= 0) { }
             byte[] bytes = tail.array();
             ByteArrayOutputStream reversed = new ByteArrayOutputStream();
+            // 从尾部逐字节寻找最近的有效提交，损坏或未提交的尾行会被跳过。
             for (int index = tail.position() - 1; index >= 0; index--) {
                 byte value = bytes[index];
                 if (value == '\n') {

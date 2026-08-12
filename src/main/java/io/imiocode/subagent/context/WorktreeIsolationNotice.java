@@ -3,6 +3,7 @@ package io.imiocode.subagent.context;
 import io.imiocode.conversation.SystemReminder;
 import io.imiocode.worktree.model.WorktreeSession;
 
+/** 为隔离子 Agent 注入 Worktree 路径、分支和禁止跨工作区操作的约束。 */
 public final class WorktreeIsolationNotice {
     private WorktreeIsolationNotice() { }
     public static SystemReminder format(WorktreeSession session) {

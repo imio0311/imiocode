@@ -160,6 +160,12 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * ImioCode 主进程入口，负责装配配置、Provider、工具、持久上下文和终端会话。
+ *
+ * <p>工作区切换会重建与路径绑定的运行时资源；进程级资源则在最外层统一关闭，避免旧 Worktree 的
+ * 工具、权限沙箱或会话状态泄漏到新工作区。</p>
+ */
 public final class ImioCodeApplication {
     private ImioCodeApplication() {
     }

@@ -5,6 +5,7 @@ import io.imiocode.command.*;
 import java.util.List;
 import java.util.Set;
 
+/** 将当前 Agent 切换到只暴露只读工具的规划模式。 */
 public final class PlanCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "plan", Set.of(), "/plan", "切换到只读规划模式", CommandType.LOCAL);

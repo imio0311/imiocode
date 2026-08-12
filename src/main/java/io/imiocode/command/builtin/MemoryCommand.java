@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+/** 提供不经过模型的双作用域记忆查询与显式修改命令。 */
 public final class MemoryCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "memory", Set.of("mem"),

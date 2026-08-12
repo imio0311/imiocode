@@ -14,6 +14,11 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * 驱动交互式终端会话，并把 Agent 生命周期事件映射为可见 UI 状态。
+ *
+ * <p>本循环只处理进程级兼容命令和渲染；其余 Slash Command 由会话协调器统一分流。</p>
+ */
 public final class ConversationLoop {
     private final ConversationSession session;
     private final TerminalUi terminal;
@@ -62,6 +67,7 @@ public final class ConversationLoop {
 
             terminal.updateState(UiState.THINKING);
             try {
+                // 单个监听器维护思考行和回答行的开闭状态，避免流式事件交错时破坏终端布局。
                 session.sendWithEvents(input, new ConversationListener() {
                     private boolean responseLineStarted;
                     private boolean thinkingLineStarted;
@@ -197,6 +203,7 @@ public final class ConversationLoop {
     }
 
     public void requestStop() {
+        // 终端中断和 /exit 可能并发到达，只允许第一个请求关闭底层会话。
         if (stopping.compareAndSet(false, true)) {
             session.cancelActive();
             session.close();

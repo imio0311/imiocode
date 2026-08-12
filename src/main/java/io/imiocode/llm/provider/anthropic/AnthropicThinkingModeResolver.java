@@ -7,6 +7,11 @@ import io.imiocode.llm.LlmException;
 
 import java.util.Locale;
 
+/**
+ * 根据 Anthropic 模型族和显式配置选择 Thinking 协议模式。
+ *
+ * <p>无法可靠识别的模型会拒绝自动猜测，要求用户明确配置，避免发送 Provider 不接受的请求结构。</p>
+ */
 public final class AnthropicThinkingModeResolver {
     public ThinkingMode resolve(AppConfig config) throws LlmException {
         if (!config.thinking().enabled()) {
@@ -18,6 +23,7 @@ public final class AnthropicThinkingModeResolver {
             return configured;
         }
         String model = config.model().toLowerCase(Locale.ROOT);
+        // 模型命名规则只用于已知系列；未知未来型号必须走上面的显式配置路径。
         ThinkingMode resolved;
         if (model.startsWith("claude-3")
                 || model.matches(".*-(?:opus|sonnet)-4-(?:[0-5])(?:-|$).*")) {

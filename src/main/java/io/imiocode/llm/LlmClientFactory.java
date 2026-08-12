@@ -14,6 +14,12 @@ import io.imiocode.tool.ToolRegistry;
 
 import java.net.http.HttpClient;
 
+/**
+ * 根据统一运行配置组装对应 Provider 的 LLM 客户端。
+ *
+ * <p>工厂在此集中创建 HTTP、JSON、SSE 和 Prompt 依赖，使三个 Provider 共享相同的超时、
+ * 工具定义与错误映射边界。</p>
+ */
 public final class LlmClientFactory {
     public LlmClient create(AppConfig config) {
         return create(config, new ToolRegistry());
@@ -27,6 +33,7 @@ public final class LlmClientFactory {
     }
 
     public LlmClient create(AppConfig config, PromptAssembler prompts) {
+        // Provider 客户端不跨配置实例复用，避免切换工作区后沿用旧模型、密钥或超时设置。
         HttpClient httpClient = new HttpClientFactory().create(config);
         ObjectMapper objectMapper = new ObjectMapper();
         SseEventReader eventReader = new SseEventReader();

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.node.*;
 import io.imiocode.team.coordinator.*;
 import io.imiocode.tool.*;
 
+/** 在双锁和 Lead 身份校验后进入或退出 Coordinator Mode。 */
 public final class CoordinatorModeTool extends BaseTool {
     private final CoordinatorModeController controller;private final TeamToolContext context;private final java.util.function.Supplier<ToolSelection> currentSelection;
     public CoordinatorModeTool(CoordinatorModeController controller,TeamToolContext context,ToolLimits limits,SecretRedactor redactor){this(controller,context,ToolSelection::allEnabled,limits,redactor);}

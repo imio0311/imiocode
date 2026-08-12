@@ -9,6 +9,7 @@ import io.imiocode.command.CommandType;
 import java.util.List;
 import java.util.Set;
 
+/** 构造只读代码审查请求，并显式转发给 Agent Loop。 */
 public final class ReviewCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "review", Set.of("rv"), "/review [focus]", "让 Agent 审查当前代码变更", CommandType.PROMPT);

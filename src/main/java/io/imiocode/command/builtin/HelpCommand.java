@@ -4,6 +4,7 @@ import io.imiocode.command.*;
 import java.util.List;
 import java.util.Set;
 
+/** 按核心命令与兼容命令分组呈现当前动态命令目录。 */
 public final class HelpCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "help", Set.of("h", "?"), "/help", "显示命令目录和用法", CommandType.LOCAL);

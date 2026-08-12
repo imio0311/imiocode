@@ -3,6 +3,11 @@ package io.imiocode.conversation;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * 由角色和有序消息部件组成的不可变对话消息。
+ *
+ * <p>构造时校验角色允许的部件类型，防止把 Tool Result 或 Thinking 发送到错误的协议位置。</p>
+ */
 public record ChatMessage(MessageRole role, List<MessagePart> parts) {
     public ChatMessage {
         Objects.requireNonNull(role, "role");

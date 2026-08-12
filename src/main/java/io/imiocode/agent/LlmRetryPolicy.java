@@ -7,6 +7,11 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 
+/**
+ * 根据错误类型、副作用边界和剩余时间决定是否重试一次 LLM 调用。
+ *
+ * <p>工具一旦开始执行便停止自动重试，避免重复产生外部副作用；输出上限错误则只提升 Token 上限。</p>
+ */
 public final class LlmRetryPolicy {
     public static final int MAX_RETRIES = 3;
     public static final int OUTPUT_TOKEN_CEILING = 64_000;

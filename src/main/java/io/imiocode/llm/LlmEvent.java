@@ -5,6 +5,11 @@ import io.imiocode.tool.ToolCall;
 
 import java.util.Objects;
 
+/**
+ * Provider 流式响应归一后的事件集合。
+ *
+ * <p>事件位置用于将交错到达的 Thinking 与 Tool Call 分片重新组装为稳定的消息部件。</p>
+ */
 public sealed interface LlmEvent permits LlmEvent.TextDelta, LlmEvent.ThinkingDelta,
         LlmEvent.ThinkingCompleted, LlmEvent.ToolCallStarted, LlmEvent.ToolCallDelta,
         LlmEvent.ToolCallCompleted, LlmEvent.StreamCompleted {

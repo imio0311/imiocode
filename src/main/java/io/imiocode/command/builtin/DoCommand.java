@@ -5,6 +5,7 @@ import io.imiocode.command.*;
 import java.util.List;
 import java.util.Set;
 
+/** 将当前 Agent 从只读规划切回正常执行模式。 */
 public final class DoCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "do", Set.of(), "/do", "切换到正常执行模式", CommandType.LOCAL);

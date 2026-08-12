@@ -9,6 +9,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
 
+/**
+ * 提供会话存储的应用层入口，并在创建或切换会话后执行保留策略。
+ *
+ * <p>事务完整性与损坏恢复由 {@link SessionStore} 负责；本类型只编排 CRUD 和按时间、数量清理。</p>
+ */
 public final class SessionManager {
     private final SessionStore store;
     private final SessionsConfig config;
@@ -26,6 +31,7 @@ public final class SessionManager {
 
     public void applyRetention(SessionId current) {
         if (config.retentionDays() == 0 && config.maxSessions() == 0) return;
+        // 当前会话必须保留；数量上限中的 +1 正是为当前会话预留的位置。
         List<SessionSummary> summaries = store.list().stream()
                 .filter(item -> !item.id().equals(current))
                 .sorted(Comparator.comparing(SessionSummary::updatedAt)).toList();
@@ -34,6 +40,7 @@ public final class SessionManager {
         int excess = config.maxSessions() == 0 ? 0 : Math.max(0, summaries.size() + 1 - config.maxSessions());
         for (int i = 0; i < summaries.size(); i++) {
             SessionSummary item = summaries.get(i);
+            // 列表按更新时间升序排列，先删除超出数量上限的最旧会话，再应用时间截止线。
             if (i < excess || item.updatedAt().isBefore(cutoff)) store.delete(item.id());
         }
     }

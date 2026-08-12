@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 
+/** 将用户级和项目级长期记忆按固定优先关系注入会话提醒。 */
 public final class MemoryReminderFormatter {
     public List<SystemReminder> format(List<MemoryDocument> documents) {
         List<SystemReminder> result = new ArrayList<>();

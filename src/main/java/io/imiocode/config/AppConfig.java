@@ -4,6 +4,11 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.Objects;
 
+/**
+ * 完成默认值合并与约束校验后的不可变运行配置。
+ *
+ * <p>该类型包含 API Key，日志表示始终将其隐藏；需要切换模型时使用 {@link #withModel} 创建新快照。</p>
+ */
 public record AppConfig(
         Provider provider,
         String model,
@@ -131,6 +136,7 @@ public record AppConfig(
 
     @Override
     public String toString() {
+        // 配置诊断可以展示连接目标和非敏感参数，但任何情况下都不能输出凭据。
         return "AppConfig[provider=" + provider
                 + ", model=" + model
                 + ", apiKey=***"

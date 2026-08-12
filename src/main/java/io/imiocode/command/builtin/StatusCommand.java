@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+/** 显示不包含凭据的当前运行状态，且不触发任何模型请求。 */
 public final class StatusCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "status", Set.of("st"), "/status", "显示当前安全运行状态", CommandType.LOCAL);

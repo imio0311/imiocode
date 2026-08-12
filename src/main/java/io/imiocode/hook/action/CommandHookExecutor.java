@@ -12,6 +12,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * 展开并执行 Hook 命令，将进程结果脱敏后映射为统一 Hook 状态。
+ *
+ * <p>子进程只继承启动所需的少量系统变量；模型密钥等敏感环境变量不会默认传播。</p>
+ */
 public final class CommandHookExecutor implements HookActionExecutor<CommandAction>, AutoCloseable {
     private final HookTemplateResolver templates;
     private final HookProcessRunner runner;
@@ -34,6 +39,7 @@ public final class CommandHookExecutor implements HookActionExecutor<CommandActi
         return HookActionResult.success(output, result.elapsed());
     }
     private Map<String, String> environment(HookContext context) {
+        // 使用新映射显式构造环境，不能以 System.getenv() 为基础整体复制。
         Map<String, String> env = new LinkedHashMap<>();
         Map<String, String> system = System.getenv();
         for (String name : new String[]{"PATH", "Path", "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "HOME"})

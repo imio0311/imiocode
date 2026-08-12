@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.node.*;
 import io.imiocode.team.runtime.*;
 import io.imiocode.tool.*;
 
+/** 经高风险权限确认后停止成员并执行保守的团队资源清理。 */
 public final class TeamDeleteTool extends BaseTool {
     private final AgentTeamManager teams;private final TeamToolContext context;
     public TeamDeleteTool(AgentTeamManager teams,TeamToolContext context,ToolLimits limits,SecretRedactor redactor){super(createDefinition(),limits,redactor);this.teams=teams;this.context=context;}

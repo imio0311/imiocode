@@ -6,6 +6,7 @@ import io.imiocode.session.SessionSummary;
 import java.util.List;
 import java.util.Set;
 
+/** 在本地管理会话列表、创建、恢复和经确认的删除，不向模型发送命令内容。 */
 public final class SessionCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "session", Set.of("sessions"),

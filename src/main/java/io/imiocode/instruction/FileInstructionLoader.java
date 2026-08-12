@@ -8,6 +8,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 
+/**
+ * 按用户级到项目近端的优先级发现、展开并合并 {@code MEWCODE.md} 指令。
+ *
+ * <p>单个来源失败会记录问题并继续加载其他来源；include 的路径和总容量边界由展开器强制执行。</p>
+ */
 public final class FileInstructionLoader implements InstructionLoader {
     public static final String FILE_NAME = "MEWCODE.md";
     private final GitProjectLocator projectLocator;
@@ -54,6 +59,7 @@ public final class FileInstructionLoader implements InstructionLoader {
     }
 
     private static void addProjectCandidates(List<Candidate> target, Path root, Path workspace) {
+        // 越靠近当前工作目录优先级越高，允许子目录覆盖仓库根规则。
         Path relative = root.relativize(workspace);
         target.add(new Candidate(root.resolve(FILE_NAME), root, InstructionScope.PROJECT, 10));
         Path current = root;

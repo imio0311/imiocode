@@ -2,6 +2,7 @@ package io.imiocode.llm;
 
 import java.util.OptionalLong;
 
+/** 聚合不同 Provider 可能缺失的 Token 用量字段，并拒绝负数统计。 */
 public final class TokenUsageBuilder {
     private Long input;
     private Long output;

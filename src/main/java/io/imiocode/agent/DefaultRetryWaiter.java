@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.locks.LockSupport;
 
+/** 使用短时间片等待重试，以便及时观察任务取消和总超时。 */
 final class DefaultRetryWaiter implements RetryWaiter {
     private static final long MAX_SLICE_NANOS = Duration.ofMillis(50).toNanos();
 

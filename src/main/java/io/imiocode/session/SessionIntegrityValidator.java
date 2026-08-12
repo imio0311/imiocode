@@ -7,6 +7,11 @@ import io.imiocode.session.record.TransactionMode;
 
 import java.util.List;
 
+/**
+ * 校验一段 JSONL 会话事务的 ID、序号、消息计数和摘要是否形成完整提交。
+ *
+ * <p>任一条件不一致都视为存储损坏，不能把部分消息恢复到对话历史。</p>
+ */
 public final class SessionIntegrityValidator {
     public void validateTransaction(TransactionBeginRecord begin, List<MessageRecord> messages,
                                     TransactionCommitRecord commit, int currentSize, long expectedCommit,

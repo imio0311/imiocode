@@ -9,6 +9,7 @@ import io.imiocode.command.CommandType;
 import java.util.List;
 import java.util.Set;
 
+/** 清空终端可见内容但保留持久会话历史，并先取消仍在运行的工作。 */
 public final class ClearCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "clear", Set.of("cls"), "/clear", "清空终端显示，不删除会话历史", CommandType.UI);

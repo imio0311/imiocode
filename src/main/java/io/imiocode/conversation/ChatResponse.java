@@ -6,6 +6,7 @@ import io.imiocode.llm.TokenUsage;
 import java.util.List;
 import java.util.Objects;
 
+/** 表示已完整组装的助手消息及其可选 Token 用量。 */
 public record ChatResponse(ChatMessage message, TokenUsage usage) {
     public ChatResponse {
         Objects.requireNonNull(message, "message");

@@ -4,6 +4,7 @@ import io.imiocode.command.*;
 import java.util.List;
 import java.util.Set;
 
+/** 立即请求压缩当前上下文，并在不满足压缩条件时展示原因。 */
 public final class CompactCommand implements Command {
     private static final CommandDescriptor DESCRIPTOR = new CommandDescriptor(
             "compact", Set.of(), "/compact", "立即压缩当前会话上下文", CommandType.LOCAL);

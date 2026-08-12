@@ -5,6 +5,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
+/**
+ * 识别 Slash Command 并解析轻量引号与反斜杠转义。
+ *
+ * <p>该解析器不是 Shell：它不执行变量、子命令或管道展开，解析结果只交给本地命令注册表。</p>
+ */
 public final class CommandParser {
     public Optional<ParsedCommand> parse(String input) {
         if (input == null || !input.stripLeading().startsWith("/")) return Optional.empty();

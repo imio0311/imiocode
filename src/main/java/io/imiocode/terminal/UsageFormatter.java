@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+/** 只展示 Provider 实际返回的 Token 用量字段，缺失字段不以零伪造。 */
 public final class UsageFormatter {
     public String format(TokenUsage usage) {
         Objects.requireNonNull(usage, "usage");

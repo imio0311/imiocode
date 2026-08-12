@@ -3,6 +3,11 @@ package io.imiocode.llm;
 import java.time.Duration;
 import java.util.Optional;
 
+/**
+ * 对外隐藏 Provider 原始载荷的结构化 LLM 失败。
+ *
+ * <p>{@code safeMessage} 可以展示给用户；是否真正重试仍由 Agent 策略结合副作用和剩余时间判断。</p>
+ */
 public final class LlmException extends Exception {
     private final LlmErrorType type;
     private final boolean recoverable;

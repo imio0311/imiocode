@@ -8,6 +8,11 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 
+/**
+ * 编排双作用域记忆的校验、去重、容量控制和原子替换。
+ *
+ * <p>公开修改方法使用同一实例锁串行化，避免读出旧文档后由并发写入覆盖；安全策略始终先于落盘执行。</p>
+ */
 public final class MemoryManager {
     private final MemoryStore store;
     private final MemorySafetyPolicy policy;
@@ -68,6 +73,7 @@ public final class MemoryManager {
         int added = 0, updatedCount = 0, skipped = 0;
         List<String> warnings = new ArrayList<>();
         for (MemoryScope scope : MemoryScope.values()) {
+            // 候选按作用域批量应用，每个作用域最多执行一次文档替换。
             if (!policy.scopeEnabled(scope)) continue;
             MemoryDocument document = store.load(scope);
             List<MemoryEntry> entries = new ArrayList<>(document.entries());
@@ -102,6 +108,7 @@ public final class MemoryManager {
     public boolean autoExtractEnabled() { return config.enabled() && config.autoExtract(); }
 
     private void replaceChecked(MemoryDocument document) {
+        // 同时校验条目数和最终 UTF-8 文件大小，不能用字符数近似持久化容量。
         ensureCapacity(document.entries().size());
         long bytes = renderBytes(document);
         if (bytes > config.maxFileBytes()) throw new MemoryException("记忆文件超过容量限制");

@@ -11,6 +11,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.List;
 
+/**
+ * 映射根配置文件的原始结构。
+ *
+ * <p>这里保留可空字段，用于区分“用户未配置”和“用户显式配置”；默认值、范围校验与多来源合并
+ * 由 {@link ConfigLoader} 统一完成，因此该类型不是可直接供运行时使用的最终配置。</p>
+ */
 record ConfigDocument(
         String provider,
         String model,
@@ -34,6 +40,7 @@ record ConfigDocument(
         Map<String, ProviderConfig> providers) {
 
     ConfigDocument {
+        // 在反序列化边界创建不可变快照，避免后续配置合并受到调用方集合修改的影响。
         if (providers == null) {
             providers = Map.of();
         } else {
@@ -60,6 +67,7 @@ record ConfigDocument(
 
     @Override
     public String toString() {
+        // Provider 配置可能包含 API Key；诊断输出只报告是否配置，绝不展开敏感内容。
         return "ConfigDocument[provider=" + provider
                 + ", model=" + model
                 + ", connectTimeoutSeconds=" + connectTimeoutSeconds

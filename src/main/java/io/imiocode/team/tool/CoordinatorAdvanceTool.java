@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.node.*;
 import io.imiocode.team.coordinator.*;
 import io.imiocode.tool.*;
 
+/** 仅允许按预期旧阶段和固定顺序推进 Coordinator 状态机。 */
 public final class CoordinatorAdvanceTool extends BaseTool {
     private final CoordinatorModeController controller;
     public CoordinatorAdvanceTool(CoordinatorModeController controller,ToolLimits limits,SecretRedactor redactor){super(createDefinition(),limits,redactor);this.controller=controller;}

@@ -6,6 +6,7 @@ import io.imiocode.hook.template.HookTemplateResolver;
 import java.time.Duration;
 import java.util.Objects;
 
+/** 将模板展开为下一次模型请求使用的受控 System Reminder 文本。 */
 public final class PromptHookExecutor implements HookActionExecutor<PromptAction> {
     private final HookTemplateResolver templates;
     public PromptHookExecutor(HookTemplateResolver templates) { this.templates = Objects.requireNonNull(templates); }

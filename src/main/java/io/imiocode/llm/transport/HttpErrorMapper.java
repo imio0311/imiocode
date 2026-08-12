@@ -10,6 +10,11 @@ import java.time.Instant;
 import java.time.Duration;
 import java.util.Locale;
 
+/**
+ * 将 HTTP 状态、Provider 错误码和传输异常归一为可安全展示的 LLM 错误。
+ *
+ * <p>映射结果不包含响应正文，避免上游错误载荷中的凭据或用户数据进入终端。</p>
+ */
 public final class HttpErrorMapper {
     private final RetryAfterParser retryAfterParser = new RetryAfterParser();
 
@@ -27,6 +32,7 @@ public final class HttpErrorMapper {
             return new LlmException(LlmErrorType.AUTHENTICATION, true, statusCode, "认证失败，请检查 API Key");
         }
         if (statusCode == 429) {
+            // Retry-After 允许秒数或 HTTP 日期；解析失败时交由通用退避策略决定等待时间。
             Duration retryAfter = headers.firstValue("Retry-After")
                     .flatMap(value -> retryAfterParser.parse(value, now))
                     .orElse(null);
@@ -65,6 +71,7 @@ public final class HttpErrorMapper {
             return new LlmException(LlmErrorType.TIMEOUT, true, null, "模型请求超时", throwable);
         }
         if (throwable instanceof InterruptedException) {
+            // 恢复中断标记，让上层 Agent 能区分主动取消与可重试的网络失败。
             Thread.currentThread().interrupt();
             return new LlmException(LlmErrorType.INTERRUPTED, false, null, "模型请求已中断", throwable);
         }

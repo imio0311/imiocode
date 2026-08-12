@@ -5,6 +5,7 @@ import io.imiocode.config.UiVerbosity;
 import java.util.List;
 import java.util.Set;
 
+/** 在当前终端进程内切换精简或详细输出，不持久化配置。 */
 public final class VerbosityCommand implements Command {
     private final CommandDescriptor descriptor;
     private final UiVerbosity verbosity;

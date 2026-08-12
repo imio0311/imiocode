@@ -7,6 +7,7 @@ import io.imiocode.team.runtime.*;
 import io.imiocode.tool.*;
 import java.util.function.Supplier;
 
+/** 以当前团队身份发送持久 Mailbox 消息，并按需恢复 idle 成员。 */
 public final class SendMessageTool extends BaseTool {
     private final TeamMessenger teams;private final Supplier<TeamPrincipal> principal;
     public SendMessageTool(TeamMessenger teams,Supplier<TeamPrincipal> principal,ToolLimits limits,SecretRedactor redactor){super(createDefinition(),limits,redactor);this.teams=teams;this.principal=principal;}
