@@ -79,6 +79,25 @@ class PermissionRequestFactoryTest {
         assertEquals(ToolRisk.HIGH, mcp.risk());
     }
 
+    @Test
+    void classifiesTeamToolsWithoutRequiringFakePathArguments() {
+        PermissionRequest create = factory.create(
+                call("TeamCreate", "team_name", "demo"),
+                definition("TeamCreate", ToolRisk.LOW));
+        PermissionRequest list = factory.create(
+                new ToolCall("2", "TaskList", JsonNodeFactory.instance.objectNode()),
+                definition("TaskList", ToolRisk.LOW));
+        PermissionRequest converge = factory.create(
+                new ToolCall("3", "TeamConverge", JsonNodeFactory.instance.objectNode()),
+                definition("TeamConverge", ToolRisk.LOW));
+
+        assertEquals(PermissionOperation.WRITE, create.operation());
+        assertEquals(PermissionOperation.READ, list.operation());
+        assertEquals(PermissionOperation.READ, converge.operation());
+        assertEquals(".imiocode/teams/team.json", create.normalizedTarget());
+        assertEquals(".", list.normalizedTarget());
+    }
+
     private static ToolCall call(String tool, String field, String value) {
         return new ToolCall("1", tool, JsonNodeFactory.instance.objectNode().put(field, value));
     }

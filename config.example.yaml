@@ -88,6 +88,20 @@ skills:
       - raw.githubusercontent.com
       - api.github.com
 
+# CH15 Agent Team。auto：tmux 会话优先 tmux；macOS+iTerm2 次之；否则 in-process。
+teams:
+  backend: auto
+  # Coordinator Mode 仍需同时设置 IMIO_COORDINATOR_MODE=true；默认双锁均关闭。
+  coordinator-enabled: false
+  max-teams: 8
+  max-members-per-team: 8
+  max-tasks-per-team: 256
+  max-messages-per-mailbox: 2048
+  max-message-chars: 32000
+  max-transcript-bytes: 8388608
+  probe-timeout-seconds: 2
+  shutdown-timeout-seconds: 10
+
 mcp:
   servers:
     context7:

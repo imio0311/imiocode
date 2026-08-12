@@ -27,6 +27,7 @@ record ConfigDocument(
         SkillsDocument skills,
         WorktreesDocument worktrees,
         SubagentsDocument subagents,
+        TeamsDocument teams,
         McpConfigDocument mcp,
         PermissionConfigDocument permissions,
         List<HookDocument> hooks,
@@ -46,7 +47,7 @@ record ConfigDocument(
                 null, null, null, null, null,
                 null, null, null, null, null,
                 null, null, null, null, null,
-                null, null, null, Map.of());
+                null, null, null, null, Map.of());
     }
 
     ProviderConfig providerConfig(Provider selectedProvider) {
@@ -73,6 +74,7 @@ record ConfigDocument(
                 + ", memory=" + memory
                 + ", skills=" + (skills == null ? "default" : "configured")
                 + ", worktrees=" + (worktrees == null ? "default" : "configured")
+                + ", teams=" + (teams == null ? "default" : "configured")
                 + ", mcp=" + (mcp == null ? "absent" : "configured")
                 + ", permissions=" + (permissions == null ? "absent" : "configured")
                 + ", hooks=" + hooks.size()
@@ -144,6 +146,19 @@ record ConfigDocument(
             @JsonProperty("max-background-tasks") Integer maxBackgroundTasks,
             @JsonProperty("max-task-records") Integer maxTaskRecords,
             @JsonProperty("notification-capacity") Integer notificationCapacity) {
+    }
+
+    record TeamsDocument(
+            String backend,
+            @JsonProperty("coordinator-enabled") Boolean coordinatorEnabled,
+            @JsonProperty("max-teams") Integer maxTeams,
+            @JsonProperty("max-members-per-team") Integer maxMembersPerTeam,
+            @JsonProperty("max-tasks-per-team") Integer maxTasksPerTeam,
+            @JsonProperty("max-messages-per-mailbox") Integer maxMessagesPerMailbox,
+            @JsonProperty("max-message-chars") Integer maxMessageChars,
+            @JsonProperty("max-transcript-bytes") Integer maxTranscriptBytes,
+            @JsonProperty("probe-timeout-seconds") Integer probeTimeoutSeconds,
+            @JsonProperty("shutdown-timeout-seconds") Integer shutdownTimeoutSeconds) {
     }
 
     record InstallDocument(

@@ -51,6 +51,17 @@ class WorkspacePathSandboxTest {
         assertFalse(sandbox.inspect(request("read_file", "link/secret.txt")).allowed());
     }
 
+    @Test
+    void allowsManagedTeamTargetsAndRejectsTraversal() throws IOException {
+        Files.createDirectories(workspace.resolve(".imiocode/teams"));
+        WorkspacePathSandbox sandbox = new WorkspacePathSandbox(new WorkspacePolicy(workspace));
+
+        assertTrue(sandbox.inspect(request("TeamCreate",
+                ".imiocode/teams/team.json")).allowed());
+        assertFalse(sandbox.inspect(request("TeamCreate",
+                ".imiocode/teams/../escape/team.json")).allowed());
+    }
+
     private static PermissionRequest request(String tool, String target) {
         return new PermissionRequest(
                 new ToolCall("1", tool,

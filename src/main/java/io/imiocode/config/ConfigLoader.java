@@ -10,6 +10,8 @@ import io.imiocode.hook.config.HookConfigLoadResult;
 import io.imiocode.hook.config.HookConfigMapper;
 import io.imiocode.subagent.config.SubagentConfig;
 import io.imiocode.worktree.config.WorktreeConfig;
+import io.imiocode.team.config.TeamRuntimeConfig;
+import io.imiocode.team.model.TeamBackend;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -153,6 +155,7 @@ public final class ConfigLoader {
                 buildSkillInstallConfig(document.skills()),
                 buildWorktreeConfig(document.worktrees()),
                 buildSubagentConfig(document.subagents()),
+                buildTeamConfig(document.teams()),
                 hooks,
                 redactor,
                 new ConfigSourceSummary(appSource, mcpSource, permissionSource),
@@ -430,6 +433,28 @@ public final class ConfigLoader {
                     document.notificationCapacity() == null ? defaults.notificationCapacity() : document.notificationCapacity());
         } catch (IllegalArgumentException exception) {
             throw new ConfigException("config.yaml 配置项 subagents 无效: " + exception.getMessage(), exception);
+        }
+    }
+
+    private static TeamRuntimeConfig buildTeamConfig(ConfigDocument.TeamsDocument document) {
+        TeamRuntimeConfig defaults = TeamRuntimeConfig.defaults();
+        if (document == null) return defaults;
+        try {
+            return new TeamRuntimeConfig(
+                    TeamBackend.parse(document.backend()),
+                    document.coordinatorEnabled() == null ? defaults.coordinatorEnabled() : document.coordinatorEnabled(),
+                    document.maxTeams() == null ? defaults.maxTeams() : document.maxTeams(),
+                    document.maxMembersPerTeam() == null ? defaults.maxMembersPerTeam() : document.maxMembersPerTeam(),
+                    document.maxTasksPerTeam() == null ? defaults.maxTasksPerTeam() : document.maxTasksPerTeam(),
+                    document.maxMessagesPerMailbox() == null ? defaults.maxMessagesPerMailbox() : document.maxMessagesPerMailbox(),
+                    document.maxMessageChars() == null ? defaults.maxMessageChars() : document.maxMessageChars(),
+                    document.maxTranscriptBytes() == null ? defaults.maxTranscriptBytes() : document.maxTranscriptBytes(),
+                    Duration.ofSeconds(document.probeTimeoutSeconds() == null
+                            ? defaults.probeTimeout().toSeconds() : document.probeTimeoutSeconds()),
+                    Duration.ofSeconds(document.shutdownTimeoutSeconds() == null
+                            ? defaults.shutdownTimeout().toSeconds() : document.shutdownTimeoutSeconds()));
+        } catch (IllegalArgumentException exception) {
+            throw new ConfigException("config.yaml 配置项 teams 无效: " + exception.getMessage(), exception);
         }
     }
 

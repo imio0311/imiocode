@@ -29,4 +29,45 @@ class SubagentToolFilterTest {
         assertEquals(Set.of(),selection.allowedNames());
         assertFalse(selection.allows("bash"));
     }
+
+    @Test void ordinarySubagentNeverInheritsTeamControlPlane() {
+        var definition=new AgentDefinitionParser().parse("""
+                ---
+                name: ordinary
+                description: ordinary
+                ---
+                prompt
+                """,AgentDefinitionSource.PROJECT,null);
+        var selection=new SubagentToolFilter(SubagentConfig.defaults()).select(definition,
+                Set.of("read_file","TeamCreate","TeamDelete","TeamConverge","TaskList","SendMessage"),false);
+        assertEquals(Set.of("read_file"),selection.allowedNames());
+    }
+
+    @Test void teamMemberDefaultsToCoreWorkToolsAndRequiresExplicitExtensionAuthorization() {
+        var unrestricted = new AgentDefinitionParser().parse("""
+                ---
+                name: worker
+                description: worker
+                ---
+                prompt
+                """, AgentDefinitionSource.PROJECT, null);
+        var filter = new SubagentToolFilter(SubagentConfig.defaults());
+        Set<String> enabled = Set.of("read_file", "write_file", "bash", "load_skill",
+                "install_skill", "TeamCreate", "TeamConverge", "agent", "mcp_demo__query");
+
+        var defaults = filter.selectTeamMember(unrestricted, enabled);
+        assertEquals(Set.of("read_file", "write_file", "bash"), defaults.allowedNames());
+
+        var explicit = new AgentDefinitionParser().parse("""
+                ---
+                name: mcp-worker
+                description: worker
+                tools: [read_file, mcp_demo__query, TeamCreate]
+                ---
+                prompt
+                """, AgentDefinitionSource.PROJECT, null);
+        var authorized = filter.selectTeamMember(explicit, enabled);
+        assertEquals(Set.of("read_file", "mcp_demo__query"), authorized.allowedNames());
+        assertFalse(authorized.allows("TeamCreate"));
+    }
 }

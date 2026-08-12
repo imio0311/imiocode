@@ -17,15 +17,26 @@ import java.util.Objects;
 /** 将六个核心工具的参数转换成统一权限请求。 */
 public final class PermissionRequestFactory {
     private static final int MAX_DISPLAY_CHARS = 160;
-    private static final Map<String, PermissionOperation> OPERATIONS = Map.of(
-            "read_file", PermissionOperation.READ,
-            "glob", PermissionOperation.READ,
-            "grep", PermissionOperation.READ,
-            "write_file", PermissionOperation.WRITE,
-            "edit_file", PermissionOperation.WRITE,
-            "load_skill", PermissionOperation.READ,
-            "agent", PermissionOperation.READ,
-            "bash", PermissionOperation.COMMAND);
+    private static final Map<String, PermissionOperation> OPERATIONS = Map.ofEntries(
+            Map.entry("read_file", PermissionOperation.READ),
+            Map.entry("glob", PermissionOperation.READ),
+            Map.entry("grep", PermissionOperation.READ),
+            Map.entry("write_file", PermissionOperation.WRITE),
+            Map.entry("edit_file", PermissionOperation.WRITE),
+            Map.entry("load_skill", PermissionOperation.READ),
+            Map.entry("agent", PermissionOperation.READ),
+            Map.entry("bash", PermissionOperation.COMMAND),
+            Map.entry("teamcreate", PermissionOperation.WRITE),
+            Map.entry("teamconverge", PermissionOperation.READ),
+            Map.entry("teamdelete", PermissionOperation.WRITE),
+            Map.entry("sendmessage", PermissionOperation.WRITE),
+            Map.entry("taskcreate", PermissionOperation.WRITE),
+            Map.entry("taskget", PermissionOperation.READ),
+            Map.entry("tasklist", PermissionOperation.READ),
+            Map.entry("taskupdate", PermissionOperation.WRITE),
+            Map.entry("taskstop", PermissionOperation.WRITE),
+            Map.entry("coordinatormode", PermissionOperation.READ),
+            Map.entry("coordinatoradvance", PermissionOperation.READ));
 
     private final SecretRedactor redactor;
     private final CommandRiskClassifier commandRiskClassifier;
@@ -59,6 +70,11 @@ public final class PermissionRequestFactory {
             case "grep" -> optionalText(arguments, "path", ".");
             case "load_skill" -> ".";
             case "agent" -> ".";
+            case "teamcreate" -> ".imiocode/teams/team.json";
+            case "teamdelete" -> ".imiocode/teams";
+            case "sendmessage" -> ".imiocode/teams/mailbox.jsonl";
+            case "taskcreate", "taskupdate", "taskstop" -> ".imiocode/teams/tasks.json";
+            case "taskget", "tasklist", "teamconverge", "coordinatormode", "coordinatoradvance" -> ".";
             default -> requireText(arguments, "path");
         };
         String normalized = operation == PermissionOperation.COMMAND

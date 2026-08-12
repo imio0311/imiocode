@@ -15,6 +15,7 @@ import io.imiocode.permission.PermissionReply;
 import io.imiocode.skill.SkillInvocation;
 import io.imiocode.tool.ToolExecutor;
 import io.imiocode.tool.ToolRegistry;
+import io.imiocode.team.coordinator.ConversationPolicy;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,11 +30,18 @@ public final class ConversationSession implements AutoCloseable {
     private final List<ChatMessage> history = new ArrayList<>();
     private final List<SystemReminder> pendingReminders = new ArrayList<>();
     private final Agent agent;
+    private final ConversationPolicy conversationPolicy;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean active = new AtomicBoolean();
 
     public ConversationSession(Agent agent) {
+        this(agent, ConversationPolicy.inactive());
+    }
+
+    public ConversationSession(Agent agent, ConversationPolicy conversationPolicy) {
         this.agent = Objects.requireNonNull(agent, "agent");
+        this.conversationPolicy = Objects.requireNonNull(conversationPolicy, "conversationPolicy");
+        this.agent.setRuntimePolicy(conversationPolicy);
     }
 
     public ConversationSession(LlmClient client) {
@@ -91,7 +99,8 @@ public final class ConversationSession implements AutoCloseable {
             ChatMessage userMessage = new ChatMessage(MessageRole.USER, userInput);
             List<SystemReminder> reminders;
             synchronized (pendingReminders) {
-                reminders = List.copyOf(pendingReminders);
+                List<SystemReminder> combined = new ArrayList<>(pendingReminders);
+                reminders = List.copyOf(combined);
                 pendingReminders.clear();
             }
             List<ChatMessage> committed;
@@ -100,7 +109,8 @@ public final class ConversationSession implements AutoCloseable {
             }
 
             AgentResult result = agent.run(
-                    new AgentRequest(committed, userMessage, reminders, invocation),
+                    new AgentRequest(committed, userMessage, reminders, invocation,
+                            conversationPolicy.selection()),
                     listener::onAgentEvent
             );
             applyResultHistory(result);

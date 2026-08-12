@@ -13,6 +13,7 @@ import io.imiocode.conversation.MessagePart;
 import io.imiocode.conversation.MessageRole;
 import io.imiocode.conversation.SystemReminder;
 import io.imiocode.conversation.ToolResultPart;
+import io.imiocode.conversation.ConversationRuntimePolicy;
 import io.imiocode.llm.LlmClient;
 import io.imiocode.llm.LlmErrorType;
 import io.imiocode.llm.LlmException;
@@ -70,6 +71,7 @@ public final class Agent implements AutoCloseable {
             Executors.newSingleThreadScheduledExecutor(
                     Thread.ofVirtual().name("imio-agent-watchdog-", 0).factory());
     private final AtomicBoolean closed = new AtomicBoolean();
+    private volatile ConversationRuntimePolicy runtimePolicy = ConversationRuntimePolicy.inactive();
 
     public Agent(LlmClient client, ToolRegistry registry, AgentConfig config) {
         this(client, registry, config, 8_192);
@@ -215,6 +217,12 @@ public final class Agent implements AutoCloseable {
         return modeState.get().mode();
     }
 
+    /** 绑定会话级动态策略；Coordinator 工具执行后的下一迭代立即读取新快照。 */
+    public void setRuntimePolicy(ConversationRuntimePolicy policy) {
+        if (activeTask.get() != null) throw new IllegalStateException("Agent 运行中不能替换会话策略");
+        runtimePolicy = Objects.requireNonNullElseGet(policy, ConversationRuntimePolicy::inactive);
+    }
+
     public void switchMode(AgentMode nextMode, AgentEventListener listener) {
         Objects.requireNonNull(nextMode, "nextMode 不能为空");
         AgentEventListener checkedListener =
@@ -297,13 +305,17 @@ public final class Agent implements AutoCloseable {
                 }
 
                 checkedListener.onEvent(new AgentEvent.IterationStarted(iteration));
+                ToolSelection policySelection = runtimePolicy.selection()
+                        .map(dynamic -> baseSelection.intersect(dynamic, registry.enabledNames()))
+                        .orElse(baseSelection);
                 ToolSelection selection = skillActivator == null
-                        ? baseSelection : skillActivator.selectTools(baseSelection);
+                        ? policySelection : skillActivator.selectTools(policySelection);
                 SystemReminder environmentReminder = environmentReminderFormatter.format(
                         environmentContextProvider.capture());
                 List<SystemReminder> reminders = remindersForIteration(
                         environmentReminder,
                         sessionReminders,
+                        runtimePolicy.reminders(),
                         taskMode,
                         taskModeSnapshot.includeExitReminder(),
                         iteration);
@@ -448,13 +460,15 @@ public final class Agent implements AutoCloseable {
     private static List<SystemReminder> remindersForIteration(
             SystemReminder environmentReminder,
             List<SystemReminder> sessionReminders,
+            List<SystemReminder> runtimeReminders,
             AgentMode mode,
             boolean includeExitReminder,
             int iteration
     ) {
-        List<SystemReminder> combined = new ArrayList<>(sessionReminders.size() + 2);
+        List<SystemReminder> combined = new ArrayList<>(sessionReminders.size() + runtimeReminders.size() + 2);
         combined.add(environmentReminder);
         combined.addAll(sessionReminders);
+        combined.addAll(runtimeReminders);
         PlanModePrompt.reminder(mode, iteration).ifPresent(combined::add);
         if (includeExitReminder && iteration == 1) {
             combined.add(PlanModePrompt.exitReminder());

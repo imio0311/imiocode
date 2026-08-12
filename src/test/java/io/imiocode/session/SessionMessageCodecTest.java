@@ -59,4 +59,19 @@ class SessionMessageCodecTest {
 
         assertThrows(SessionException.class, () -> codec.validateChain(List.of(call)));
     }
+
+    @Test
+    void allowsProviderToReuseCompletedCallIdInLaterTurn() {
+        var args = JsonNodeFactory.instance.objectNode().put("path", "pom.xml");
+        ChatMessage call1 = new ChatMessage(MessageRole.ASSISTANT, List.of(
+                new ToolCallPart(new ToolCall("call-1", "read_file", args))));
+        ChatMessage result1 = new ChatMessage(MessageRole.TOOL, List.of(
+                new ToolResultPart("call-1", "read_file", ToolResult.success("first"))));
+        ChatMessage call2 = new ChatMessage(MessageRole.ASSISTANT, List.of(
+                new ToolCallPart(new ToolCall("call-1", "read_file", args))));
+        ChatMessage result2 = new ChatMessage(MessageRole.TOOL, List.of(
+                new ToolResultPart("call-1", "read_file", ToolResult.success("second"))));
+
+        codec.validateChain(List.of(call1, result1, call2, result2));
+    }
 }

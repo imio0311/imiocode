@@ -1,0 +1,3 @@
+package io.imiocode.team.tool;
+import com.fasterxml.jackson.databind.node.ObjectNode;import io.imiocode.team.model.TeamPrincipal;import io.imiocode.team.task.TeamTaskService;import io.imiocode.tool.*;import java.util.function.Supplier;
+public final class TaskListTool extends AbstractTaskTool {public TaskListTool(TeamTaskService t,Supplier<TeamPrincipal> p,ToolLimits l,SecretRedactor r){super(def(),t,p,l,r);}private static ToolDefinition def(){return new ToolDefinition("TaskList","列出当前团队的全部任务。",schema(),ToolRisk.LOW);}@Override protected ToolResult executeValidated(ObjectNode a){rejectUnknownFields(a);return json(tasks.list(principal()));}}

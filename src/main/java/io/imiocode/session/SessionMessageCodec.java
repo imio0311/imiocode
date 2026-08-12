@@ -46,19 +46,21 @@ public final class SessionMessageCodec {
     }
 
     public void validateChain(List<ChatMessage> messages) {
-        Set<String> calls = new HashSet<>();
-        Set<String> results = new HashSet<>();
+        Set<String> pendingCalls = new HashSet<>();
         for (ChatMessage message : messages) {
             for (MessagePart part : message.parts()) {
                 if (part instanceof ToolCallPart toolCall) {
-                    if (!calls.add(toolCall.call().id())) throw new SessionException("工具调用 ID 重复");
+                    if (!pendingCalls.add(toolCall.call().id())) {
+                        throw new SessionException("尚未完成的工具调用 ID 重复");
+                    }
                 } else if (part instanceof ToolResultPart result) {
-                    if (!calls.contains(result.callId())) throw new SessionException("工具结果没有对应调用");
-                    if (!results.add(result.callId())) throw new SessionException("工具调用存在重复结果");
+                    if (!pendingCalls.remove(result.callId())) {
+                        throw new SessionException("工具结果没有对应调用或存在重复结果");
+                    }
                 }
             }
         }
-        if (!results.containsAll(calls)) throw new SessionException("工具调用缺少对应结果");
+        if (!pendingCalls.isEmpty()) throw new SessionException("工具调用缺少对应结果");
     }
 
     private StoredPart encodePart(MessagePart part) {

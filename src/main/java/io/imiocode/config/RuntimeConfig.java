@@ -7,6 +7,7 @@ import io.imiocode.skill.install.SkillInstallConfig;
 import io.imiocode.hook.config.HookConfigLoadResult;
 import io.imiocode.subagent.config.SubagentConfig;
 import io.imiocode.worktree.config.WorktreeConfig;
+import io.imiocode.team.config.TeamRuntimeConfig;
 
 import java.util.List;
 import java.util.Objects;
@@ -19,6 +20,7 @@ public record RuntimeConfig(
         SkillInstallConfig skillInstall,
         WorktreeConfig worktrees,
         SubagentConfig subagents,
+        TeamRuntimeConfig teams,
         HookConfigLoadResult hooks,
         SecretRedactor redactor,
         ConfigSourceSummary sources,
@@ -31,6 +33,7 @@ public record RuntimeConfig(
         Objects.requireNonNull(skillInstall, "skillInstall");
         Objects.requireNonNull(worktrees, "worktrees");
         Objects.requireNonNull(subagents, "subagents");
+        Objects.requireNonNull(teams, "teams");
         Objects.requireNonNull(hooks, "hooks");
         Objects.requireNonNull(redactor, "redactor");
         Objects.requireNonNull(sources, "sources");
@@ -46,6 +49,7 @@ public record RuntimeConfig(
                 + ", skillInstallHosts=" + skillInstall.allowedHosts().size()
                 + ", worktreeDirectory=" + worktrees.directory()
                 + ", subagentAliases=" + subagents.modelAliases().size()
+                + ", teamBackend=" + teams.preferredBackend().configValue()
                 + ", hooks=" + hooks.hooks().size()
                 + ", hookErrors=" + hooks.errors().size()
                 + ", redactor=***"

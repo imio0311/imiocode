@@ -312,3 +312,31 @@ hooks:
 `pre_tool_use`。`on-error` 可取 `ignore`、`fail`，`pre_tool_use` 额外支持 `reject`。命令输出、HTTP
 结果、通知和错误统一脱敏。任何 Hook 配置错误都会让本次整个 Hook 列表安全降级为空，并在 UI 显示诊断，
 不会部分加载或阻止 ImioCode 启动。
+
+## Agent Team 与 Coordinator Mode（CH15）
+
+主 Agent 可通过 `TeamCreate` 创建持久团队，再用带 `team_name` 的 `agent` 工具生成具名成员。
+每位成员拥有独立 Git Worktree、Mailbox、transcript 和身份；成员之间使用 `SendMessage`，任务通过
+`TaskCreate`、`TaskGet`、`TaskList`、`TaskUpdate`、`TaskStop` 共享。团队文件保存在
+`.imiocode/teams/<team>/`，消息和 transcript 写盘前会脱敏。
+
+Lead 可调用 `TeamConverge`（可选 `wait_millis`，最多 30 秒）观察成员结果、任务终态、未读消息以及
+Worktree 的 dirty/独有提交状态；该工具只汇总证据，不自动 merge、rebase 或丢弃成果。旧的
+`/tasks`、`/task info <id>` 与 `/task cancel <id>` 也会显示、读取和停止当前团队的持久任务。
+
+`teams.backend: auto` 的选择顺序是：当前处于 tmux 时使用 tmux；macOS 且 iTerm2 可用时使用
+iTerm2；其他情况使用 in-process。auto 的外部后端启动失败会告警并回退 in-process；显式指定的
+后端不可用时直接失败。成员完成一轮后进入 idle，Lead 再次发送消息会以原 agent ID 和旧 transcript
+续写。
+
+Coordinator Mode 默认关闭，必须同时满足：
+
+```yaml
+teams:
+  coordinator-enabled: true
+```
+
+以及环境变量 `IMIO_COORDINATOR_MODE=true`。进入后 Lead 只能使用团队委派、Task 查询/停止、
+`SendMessage`、`TeamConverge` 和 Coordinator 阶段工具，并按 Research → Synthesis → Implementation → Verification
+推进；退出后恢复原工具集。`TeamDelete` 默认保留有文件变更或独有提交的 Worktree，只有明确
+`discard: true` 才尝试丢弃，且始终只处理可证明属于该团队的资源。

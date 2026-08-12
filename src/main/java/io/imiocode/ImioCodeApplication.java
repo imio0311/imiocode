@@ -2,6 +2,7 @@ package io.imiocode;
 
 import io.imiocode.agent.Agent;
 import io.imiocode.agent.AgentHistoryContext;
+import io.imiocode.agent.AgentEvent;
 import io.imiocode.command.CommandRegistry;
 import io.imiocode.command.builtin.ClearCommand;
 import io.imiocode.command.builtin.CompactCommand;
@@ -96,6 +97,7 @@ import io.imiocode.tool.SecretRedactor;
 import io.imiocode.tool.ToolLimits;
 import io.imiocode.tool.ToolRegistry;
 import io.imiocode.tool.ToolSelection;
+import io.imiocode.tool.Tool;
 import io.imiocode.tool.core.BashTool;
 import io.imiocode.tool.core.EditFileTool;
 import io.imiocode.tool.core.GlobTool;
@@ -141,6 +143,14 @@ import io.imiocode.worktree.runtime.LaunchOptions;
 import io.imiocode.worktree.runtime.WorkspaceTransition;
 import io.imiocode.worktree.runtime.WorkspaceTransitionController;
 import io.imiocode.worktree.runtime.WorktreeBootstrap;
+import io.imiocode.team.backend.*;
+import io.imiocode.team.coordinator.*;
+import io.imiocode.team.mailbox.MailboxStore;
+import io.imiocode.team.model.*;
+import io.imiocode.team.persistence.*;
+import io.imiocode.team.runtime.*;
+import io.imiocode.team.task.*;
+import io.imiocode.team.tool.*;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -155,7 +165,7 @@ public final class ImioCodeApplication {
     }
 
     public static void main(String[] args) {
-        int exitCode = run(args);
+        int exitCode = TeamMemberProcess.requested(args) ? TeamMemberProcess.run(args) : run(args);
         if (exitCode != 0) {
             System.exit(exitCode);
         }
@@ -209,6 +219,7 @@ public final class ImioCodeApplication {
         HookRuntime hookRuntime = HookRuntime.NOOP;
         HookContextFactory hookContexts = null;
         TaskManager taskManager = null;
+        AgentTeamManager teamManager = null;
         try {
             workspace = workspace.toAbsolutePath().normalize();
             Path userHome = Path.of(System.getProperty("user.home")).toAbsolutePath().normalize();
@@ -373,13 +384,129 @@ public final class ImioCodeApplication {
                     runtimeConfig.subagents().maxTaskRecords(),
                     runtimeConfig.subagents().notificationCapacity());
             TaskManager configuredTasks = taskManager;
-            commandRegistry.register(new TaskCommand(configuredTasks));
             SubagentDispatcher subagentDispatcher = new SubagentDispatcher(
                     agentDefinitions, subagentRunner, configuredTasks,
                     () -> AgentHistoryContext.current().orElseGet(
                             () -> parentSession.get() == null ? List.of() : parentSession.get().historySnapshot()),
                     workspace);
-            registry.register(new AgentTool(subagentDispatcher, limits, redactor));
+            TeamPaths teamPaths = new TeamPaths(workspace);
+            TeamStore teamStore = new TeamStore(teamPaths);
+            MailboxStore mailboxStore = new MailboxStore(teamPaths, redactor,
+                    runtimeConfig.teams().maxMessageChars(),
+                    runtimeConfig.teams().maxMessagesPerMailbox(),
+                    runtimeConfig.teams().maxTranscriptBytes());
+            TranscriptStore transcriptStore = new TranscriptStore(teamPaths, redactor,
+                    runtimeConfig.teams().maxMessageChars(),
+                    runtimeConfig.teams().maxTranscriptBytes());
+            TeamTaskStore teamTaskStore = new TeamTaskStore(teamPaths,
+                    runtimeConfig.teams().maxTasksPerTeam());
+            JdkProcessExecutor teamProcesses = new JdkProcessExecutor();
+            InProcessBackend inProcessBackend = new InProcessBackend();
+            BackendSelector backendSelector = new BackendSelector(List.of(
+                    new TmuxBackend(teamProcesses, workspace),
+                    new ITerm2Backend(teamProcesses, workspace, System.getProperty("os.name")),
+                    inProcessBackend), System.getenv(), System.getProperty("os.name"),
+                    runtimeConfig.teams().probeTimeout());
+            TeamToolContext teamContext = new TeamToolContext();
+            java.util.concurrent.atomic.AtomicReference<AgentTeamManager> teamManagerRef =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            TeamTaskService teamTaskService = new TeamTaskService(teamStore, teamTaskStore,
+                    (team, member) -> {
+                        AgentTeamManager manager = teamManagerRef.get();
+                        if (manager != null) manager.stop(team, member);
+                    });
+            commandRegistry.register(new TaskCommand(configuredTasks, teamTaskService, teamContext::current));
+            TeamMemberRunner teamRunner = (team, agentId, type, memberWorktree, prompt, transcript) -> {
+                AgentDefinition definition = agentDefinitions.snapshot()
+                        .find(type == null || type.isBlank() ? "general-purpose" : type)
+                        .orElseThrow(() -> new IllegalArgumentException("未知团队 Agent 类型: " + type))
+                        .withIsolation(io.imiocode.subagent.definition.AgentIsolation.NONE);
+                TeamPrincipal memberPrincipal = new TeamPrincipal(team, agentId, TeamRole.MEMBER);
+                java.util.function.Supplier<TeamPrincipal> memberIdentity = () -> memberPrincipal;
+                List<Tool> memberTools = List.of(
+                        new TaskCreateTool(teamTaskService, memberIdentity, limits, redactor),
+                        new TaskGetTool(teamTaskService, memberIdentity, limits, redactor),
+                        new TaskListTool(teamTaskService, memberIdentity, limits, redactor),
+                        new TaskUpdateTool(teamTaskService, memberIdentity, limits, redactor),
+                        new TaskStopTool(teamTaskService, memberIdentity, limits, redactor),
+                        new SendMessageTool(teamManagerRef.get(), memberIdentity, limits, redactor));
+                ToolSelection memberSelection = subagentToolFilter.selectTeamMember(
+                        definition, registry.enabledNames());
+                java.util.LinkedHashSet<String> allowed = new java.util.LinkedHashSet<>(memberSelection.allowedNames());
+                memberTools.forEach(tool -> allowed.add(tool.definition().name()));
+                memberSelection = ToolSelection.only(allowed);
+                List<io.imiocode.conversation.ChatMessage> history = transcript.stream()
+                        .filter(entry -> entry.role() == TranscriptRole.USER
+                                || entry.role() == TranscriptRole.ASSISTANT)
+                        .map(entry -> new io.imiocode.conversation.ChatMessage(
+                                entry.role() == TranscriptRole.USER
+                                        ? io.imiocode.conversation.MessageRole.USER
+                                        : io.imiocode.conversation.MessageRole.ASSISTANT,
+                                entry.content()))
+                        .toList();
+                String memberOutput;
+                try (SubagentAgentHandle handle = createSubagentHandle(
+                        definition, memberSelection, memberWorktree, scopedTools,
+                        config, modelAliases, permissionSettings, redactor,
+                        configuredHooks, configuredHookContexts, memberTools, true)) {
+                    String roster = teamStore.require(team).members().values().stream()
+                            .map(item -> item.agentId() + "(" + item.agentType() + ")")
+                            .collect(java.util.stream.Collectors.joining(", "));
+                    var result = handle.agent().run(new io.imiocode.agent.AgentRequest(
+                            history,
+                            new io.imiocode.conversation.ChatMessage(
+                                    io.imiocode.conversation.MessageRole.USER, prompt),
+                            List.of(new io.imiocode.conversation.SystemReminder(
+                                    "你是团队 " + team + " 的成员 " + agentId
+                                            + "。花名册：" + roster
+                                            + "。通过 Task 工具和 SendMessage 协作；工作区是你的独立 Worktree。")),
+                            memberSelection), event -> persistTeamToolEvent(
+                                    transcriptStore, team, agentId, event,
+                                    runtimeConfig.teams().maxMessageChars()));
+                    if (!result.completed()) {
+                        throw new IllegalStateException("团队成员未正常完成: " + result.stopReason());
+                    }
+                    memberOutput = result.finalResponse().orElseThrow().text();
+                }
+                // Agent 资源关闭可能中断其内部执行器；不能把该内部信号误当成成员停止请求。
+                Thread.interrupted();
+                return memberOutput;
+            };
+            teamManager = new AgentTeamManager(workspace, runtimeConfig.teams(), teamPaths,
+                    teamStore, mailboxStore, transcriptStore, teamTaskStore,
+                    backendSelector, worktreeManager, teamRunner);
+            teamManagerRef.set(teamManager);
+            AgentTeamManager configuredTeams = teamManager;
+            TerminalUi teamTerminal = terminal;
+            configuredTeams.recover().stream()
+                    .max(java.util.Comparator.comparing(TeamConfig::updatedAt))
+                    .ifPresent(restored -> {
+                        teamContext.select(new TeamPrincipal(restored.name(),
+                                restored.leadAgentId(), TeamRole.LEAD));
+                        teamTerminal.printInfo("[Team] 已恢复团队 " + restored.name()
+                                + "，成员 " + restored.members().size() + " 名");
+                    });
+            java.util.function.Supplier<TeamPrincipal> leadIdentity = teamContext::require;
+            registry.register(new TeamCreateTool(configuredTeams, teamContext, limits, redactor));
+            registry.register(new TeamConvergeTool(configuredTeams, teamContext, limits, redactor));
+            registry.register(new TeamDeleteTool(configuredTeams, teamContext, limits, redactor));
+            registry.register(new TaskCreateTool(teamTaskService, leadIdentity, limits, redactor));
+            registry.register(new TaskGetTool(teamTaskService, leadIdentity, limits, redactor));
+            registry.register(new TaskListTool(teamTaskService, leadIdentity, limits, redactor));
+            registry.register(new TaskUpdateTool(teamTaskService, leadIdentity, limits, redactor));
+            registry.register(new TaskStopTool(teamTaskService, leadIdentity, limits, redactor));
+            registry.register(new SendMessageTool(configuredTeams, leadIdentity, limits, redactor));
+            CoordinatorModeController coordinatorMode = new CoordinatorModeController(
+                    runtimeConfig.teams().coordinatorEnabled(), System.getenv());
+            registry.register(new CoordinatorModeTool(coordinatorMode, teamContext, limits, redactor));
+            registry.register(new CoordinatorAdvanceTool(coordinatorMode, limits, redactor));
+            registry.register(new AgentTool(subagentDispatcher, configuredTeams, teamContext, limits, redactor));
+            java.util.Set<String> contextualTeamTools = java.util.Set.of(
+                    "TeamDelete", "TeamConverge", "TaskCreate", "TaskGet", "TaskList",
+                    "TaskUpdate", "TaskStop", "SendMessage");
+            teamContext.configureLifecycle(
+                    () -> contextualTeamTools.forEach(registry::enable),
+                    () -> contextualTeamTools.forEach(registry::disable));
 
             PromptAssembler promptAssembler = new PromptAssembler(
                     SystemPromptBuilder.defaults(), registry);
@@ -424,7 +551,7 @@ public final class ImioCodeApplication {
                     false,
                     configuredHooks,
                     configuredHookContexts)));
-            session = new ConversationSession(agent);
+            session = new ConversationSession(agent, new ConversationPolicy(coordinatorMode));
             parentSession.set(session);
             MarkdownMemoryStore memoryStore = new MarkdownMemoryStore(userHome, workspace);
             MemoryManager memoryManager = new MemoryManager(
@@ -492,6 +619,7 @@ public final class ImioCodeApplication {
             System.err.println("[运行错误] ImioCode 无法继续运行");
             return 1;
         } finally {
+            if (teamManager != null) teamManager.close();
             if (taskManager != null) taskManager.close();
             if (coordinator != null) {
                 coordinator.close();
@@ -523,7 +651,7 @@ public final class ImioCodeApplication {
         }
     }
 
-    private static SubagentAgentHandle createSubagentHandle(
+    static SubagentAgentHandle createSubagentHandle(
             AgentDefinition definition,
             ToolSelection selection,
             Path workdir,
@@ -534,10 +662,30 @@ public final class ImioCodeApplication {
             SecretRedactor redactor,
             HookRuntime hooks,
             HookContextFactory ignoredParentHookContexts) {
+        return createSubagentHandle(definition, selection, workdir, scopedTools, config,
+                modelAliases, parentPermissions, redactor, hooks, ignoredParentHookContexts,
+                List.of(), false);
+    }
+
+    static SubagentAgentHandle createSubagentHandle(
+            AgentDefinition definition,
+            ToolSelection selection,
+            Path workdir,
+            SubagentToolRegistryFactory scopedTools,
+            AppConfig config,
+            ModelAliasResolver modelAliases,
+            PermissionSettings parentPermissions,
+            SecretRedactor redactor,
+            HookRuntime hooks,
+            HookContextFactory ignoredParentHookContexts,
+            List<? extends Tool> teamTools,
+            boolean teamMember) {
         Path childWorkspace = workdir.toAbsolutePath().normalize();
         HookContextFactory childHookContexts = new HookContextFactory(childWorkspace);
         HookToolLifecycleListener childLifecycle = new HookToolLifecycleListener(hooks, childHookContexts);
-        ToolRegistry childRegistry = scopedTools.create(childWorkspace, childLifecycle);
+        ToolRegistry childRegistry = teamMember
+                ? scopedTools.createTeamMember(childWorkspace, childLifecycle, teamTools, selection)
+                : scopedTools.create(childWorkspace, childLifecycle);
         var resolution = modelAliases.resolve(definition, config.model());
         AppConfig childConfig = config.withModel(resolution.model());
         PromptAssembler childPrompts = new PromptAssembler(SystemPromptBuilder.defaults(), childRegistry);
@@ -574,6 +722,21 @@ public final class ImioCodeApplication {
 
     private static ToolResultOffloader offloaderFor(Path workspace, SecretRedactor redactor) {
         return new ToolResultOffloader(new ToolResultSpillStore(workspace, redactor), redactor);
+    }
+
+    private static void persistTeamToolEvent(TranscriptStore transcripts, String team, String agent,
+                                             AgentEvent event, int maxChars) {
+        if (!(event instanceof AgentEvent.ToolExecutionChanged changed)
+                || (changed.execution().state() != io.imiocode.tool.ToolExecutionState.SUCCEEDED
+                && changed.execution().state() != io.imiocode.tool.ToolExecutionState.FAILED)) return;
+        String detail = changed.execution().result() == null ? ""
+                : changed.execution().result().success()
+                ? changed.execution().result().output() : changed.execution().result().error();
+        String content = changed.execution().call().name() + " " + changed.execution().state()
+                + (detail == null || detail.isBlank() ? "" : ": " + detail);
+        if (content.length() > maxChars) content = content.substring(0, maxChars);
+        transcripts.append(team, agent, TranscriptRole.TOOL, content,
+                changed.execution().call().id());
     }
 
     private static Path discoverRepositoryRoot(Path directory) {
